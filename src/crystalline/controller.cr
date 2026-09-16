@@ -96,6 +96,10 @@ class Crystalline::Controller
           }
         end
       end
+    when LSP::WorkspaceSymbolRequest
+      @documents_lock.synchronize do
+        workspace.workspace_symbol(@server, message.params.query)
+      end
     else
       nil
     end

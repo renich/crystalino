@@ -852,6 +852,78 @@ class Crystalline::Workspace
     }
   end
 
+  def workspace_symbol(server : LSP::Server, query : String) : Array(LSP::SymbolInformation)
+    symbols = [] of LSP::SymbolInformation
+    query = query.downcase
+    
+    @projects.each do |project|
+      if index = project.lightweight_index
+        index.types.each_value do |type|
+          type_name = type.name
+          if query.empty? || type_name.downcase.includes?(query)
+            if loc = type.name_location || type.location
+              symbols << LSP::SymbolInformation.new(
+                name: type_name,
+                kind: LSP::SymbolKind::Class,
+                deprecated: false,
+                location: LSP::Location.new(
+                  uri: "file://#{loc.filename}",
+                  range: LSP::Range.new(
+                    start: LSP::Position.new(line: loc.line_number - 1, character: loc.column_number - 1),
+                    end: LSP::Position.new(line: loc.line_number - 1, character: loc.column_number - 1)
+                  )
+                ),
+                container_name: nil
+              )
+            end
+          end
+
+          type.methods.each do |method|
+            if query.empty? || method.name.downcase.includes?(query)
+              if loc = method.name_location || method.location
+                symbols << LSP::SymbolInformation.new(
+                  name: method.name,
+                  kind: method.macro ? LSP::SymbolKind::Function : LSP::SymbolKind::Method,
+                  deprecated: false,
+                  location: LSP::Location.new(
+                    uri: "file://#{loc.filename}",
+                    range: LSP::Range.new(
+                      start: LSP::Position.new(line: loc.line_number - 1, character: loc.column_number - 1),
+                      end: LSP::Position.new(line: loc.line_number - 1, character: loc.column_number - 1 + method.name_size)
+                    )
+                  ),
+                  container_name: type_name
+                )
+              end
+            end
+          end
+        end
+        
+        index.top_level_methods.each do |method|
+          if query.empty? || method.name.downcase.includes?(query)
+            if loc = method.name_location || method.location
+              symbols << LSP::SymbolInformation.new(
+                name: method.name,
+                kind: method.macro ? LSP::SymbolKind::Function : LSP::SymbolKind::Method,
+                deprecated: false,
+                location: LSP::Location.new(
+                  uri: "file://#{loc.filename}",
+                  range: LSP::Range.new(
+                    start: LSP::Position.new(line: loc.line_number - 1, character: loc.column_number - 1),
+                    end: LSP::Position.new(line: loc.line_number - 1, character: loc.column_number - 1 + method.name_size)
+                  )
+                ),
+                container_name: nil
+              )
+            end
+          end
+        end
+      end
+    end
+    
+    symbols.first(100)
+  end
+
   private def fix_source(source : String) : String
     # LSP::Log.info { "Fixing source: #{source}" }
     Crystal::Parser.parse(source)

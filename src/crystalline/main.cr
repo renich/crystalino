@@ -27,6 +27,7 @@ module Crystalline
     hover_provider: true,
     definition_provider: true,
     document_symbol_provider: true,
+    workspace_symbol_provider: true,
     # signature_help_provider: LSP::SignatureHelpOptions.new(
     #   trigger_characters: ["(", " "]
     # ),
