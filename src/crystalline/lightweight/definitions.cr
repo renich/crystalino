@@ -347,8 +347,8 @@ module Crystalline::Lightweight
         if location = visit_local_assignments(node.body, name, line)
           return location
         end
-        if node.rescues
-          node.rescues.not_nil!.each do |rescue_node|
+        if rescues = node.rescues
+          rescues.each do |rescue_node|
             if location = visit_local_assignments(rescue_node.body, name, line)
               return location
             end

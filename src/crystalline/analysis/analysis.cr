@@ -172,14 +172,16 @@ module Crystalline::Analysis
         if node.is_a? Crystal::Call
           if defs = node.target_defs
             defs.compact_map { |d|
-              start_location = d.location.try { |loc| loc.expanded_location || loc }.not_nil!
-              end_location = d.end_location.try { |loc| loc.expanded_location || loc }.not_nil!
-              {start_location, end_location}
+              start_location = d.location.try { |loc| loc.expanded_location || loc }
+              end_location = d.end_location.try { |loc| loc.expanded_location || loc }
+              {start_location, end_location} if start_location && end_location
             }
           elsif expanded_macro = node.expanded_macro
-            start_location = expanded_macro.location.try { |loc| loc.expanded_location || loc }.not_nil!
-            end_location = expanded_macro.end_location.try { |loc| loc.expanded_location || loc } || start_location
-            [{start_location, end_location}]
+            start_location = expanded_macro.location.try { |loc| loc.expanded_location || loc }
+            if start_location
+              end_location = expanded_macro.end_location.try { |loc| loc.expanded_location || loc } || start_location
+              [{start_location, end_location}]
+            end
           end
         elsif node.is_a? Crystal::Require
           location = node.location

@@ -34,8 +34,9 @@ class Crystalline::Workspace
   getter projects = [] of Project
 
   def initialize(server : LSP::Server, root_uri : String?)
-    if @root_uri = root_uri.try &->URI.parse(String)
-      @projects = Project.find_in_workspace_root @root_uri.not_nil!
+    if parsed_uri = root_uri.try &->URI.parse(String)
+      @root_uri = parsed_uri
+      @projects = Project.find_in_workspace_root parsed_uri
       if @projects.size > 0
         LSP::Log.info {
           <<-LOG
@@ -209,7 +210,7 @@ class Crystalline::Workspace
       )
     else
       # The file is not a project dependency.
-      target = file_uri.not_nil!
+      target = file_uri
       progress = Progress.new(
         token: "workspace/compile",
         title: "Building",
@@ -280,9 +281,11 @@ class Crystalline::Workspace
         end
 
         if result
-          if project.try(&.entry_point?)
-            # Store the project dependencies.
-            project.not_nil!.dependencies = result.program.requires
+          if p = project
+            if p.entry_point?
+              # Store the project dependencies.
+              p.dependencies = result.program.requires
+            end
           end
           "Completed successfully."
         else
@@ -591,10 +594,12 @@ class Crystalline::Workspace
       Analysis.definitions_at_cursor(r, location)
     }.try do |definitions|
       node = definitions.node
-      definitions.locations.try &.map { |start_loc, end_loc|
-        if node.is_a? Crystal::Path || node.is_a? Crystal::Require
+      definitions.locations.try &.compact_map { |start_loc, end_loc|
+        if node.is_a?(Crystal::Path) || node.is_a?(Crystal::Require)
+          origin_location = node.location
+          next unless origin_location
+
           target_uri = "file://#{start_loc.original_filename}"
-          origin_location = node.location.not_nil!
           origin_end_location = definitions.node.end_location || Crystal::Location.new(
             file_uri.decoded_path,
             line_number: origin_location.line_number + 1,
@@ -693,8 +698,8 @@ class Crystalline::Workspace
         node_type = node_type.base_type if node_type.responds_to? :base_type
 
         # We are looking for methods…
-        if node_type.responds_to? :defs
-          Analysis.all_defs(node_type.not_nil!).each { |def_name, definition, owner_type, nesting|
+        if node_type && node_type.responds_to?(:defs)
+          Analysis.all_defs(node_type).each { |def_name, definition, owner_type, nesting|
             owner_prefix = "*Inherited from: #{owner_type.name}*\n\n" if owner_type.responds_to? :name && owner_type != n.type
             owner_prefix ||= ""
             documentation = (owner_prefix + (definition.doc || ""))

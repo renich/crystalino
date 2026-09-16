@@ -53,7 +53,9 @@ module Crystalline::Lightweight
         # `@ivar.` receivers resolve before any method is entered.
         seed_type_vars_from_summary
         process_initialize_defs(ast) unless class_method_context?
-        process_node(@current_type_body.not_nil!, apply_cursor_bounds: true)
+        if type_body = @current_type_body
+          process_node(type_body, apply_cursor_bounds: true)
+        end
       else
         # Top-level code with no enclosing def: infer from the expressions
         # that appear before the cursor.

@@ -191,7 +191,7 @@ class Crystalline::CompletionContext
       end
     end
 
-    open_delimiter ? @cursor > open_delimiter.not_nil!.start_char : false
+    open_delimiter ? @cursor > open_delimiter.start_char : false
   end
 
   private def delimiter_end?(token : TokenSpan, current : TokenSpan)

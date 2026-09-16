@@ -568,7 +568,9 @@ module Crystalline::Lightweight
         index_ivar_assignments(node.else, type_info)
       when Crystal::Case
         node.whens.each { |a_when| index_ivar_assignments(a_when.body, type_info) }
-        index_ivar_assignments(node.else.not_nil!, type_info) if node.else
+        if e = node.else
+          index_ivar_assignments(e, type_info)
+        end
       when Crystal::While, Crystal::Until
         index_ivar_assignments(node.body, type_info)
       when Crystal::Block
@@ -1009,12 +1011,16 @@ module Crystalline::Lightweight
       when Crystal::Expressions
         node.expressions.last?.try { |last| syntax_return_type_name(last, ivars, owner) }
       when Crystal::Return
-        node.exp ? syntax_return_type_name(node.exp.not_nil!, ivars, owner) : "Nil"
+        if exp = node.exp
+          syntax_return_type_name(exp, ivars, owner)
+        else
+          "Nil"
+        end
       when Crystal::Assign
         syntax_return_type_name(node.value, ivars, owner)
       when Crystal::If
-        then_type = node.then ? syntax_return_type_name(node.then.not_nil!, ivars, owner) : nil
-        else_type = node.else ? syntax_return_type_name(node.else.not_nil!, ivars, owner) : nil
+        then_type = (t = node.then) ? syntax_return_type_name(t, ivars, owner) : nil
+        else_type = (e = node.else) ? syntax_return_type_name(e, ivars, owner) : nil
         if then_type && else_type && then_type != else_type
           "#{then_type} | #{else_type}"
         else
@@ -1076,13 +1082,15 @@ module Crystalline::Lightweight
       end
 
       if node.name.in?("try", "tap", "itself", "not_nil!")
-        receiver_type = node.obj ? syntax_return_type_name(node.obj.not_nil!, ivars, owner) : nil
+        receiver_type = (obj = node.obj) ? syntax_return_type_name(obj, ivars, owner) : nil
         return nil unless receiver_type
-        if node.name == "try" && node.block
-          # `x.try { ... }` returns the block's value, never x: do not
-          # fall back to the receiver type when the block's return is
-          # unknown (a wrong recorded return poisons every caller).
-          return syntax_block_return_type_name(node.block.not_nil!, receiver_type)
+        if node.name == "try"
+          if block = node.block
+            # `x.try { ... }` returns the block's value, never x: do not
+            # fall back to the receiver type when the block's return is
+            # unknown (a wrong recorded return poisons every caller).
+            return syntax_block_return_type_name(block, receiver_type)
+          end
         end
         return receiver_type
       end

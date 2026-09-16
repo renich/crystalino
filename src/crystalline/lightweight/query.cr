@@ -104,15 +104,15 @@ module Crystalline::Lightweight
       end
       if suffix_matches.size == 1
         suffix_matches.first
-      elsif suffix_matches.size > 1 && namespace
+      elsif suffix_matches.size > 1 && (ns = namespace)
         # Ambiguous bare name (`Location` is both `Crystal::Location` and
         # `Time::Location`): prefer the candidate sharing the longest
         # namespace prefix with the enclosing type, the way the compiler's
         # lexical resolution would pick the closest definition.
         best = suffix_matches.first
-        best_score = common_prefix_length(best, namespace.not_nil!)
+        best_score = common_prefix_length(best, ns)
         suffix_matches.each do |candidate|
-          score = common_prefix_length(candidate, namespace.not_nil!)
+          score = common_prefix_length(candidate, ns)
           if score > best_score
             best = candidate
             best_score = score
@@ -138,7 +138,8 @@ module Crystalline::Lightweight
       # Queries are immutable after construction: memoize the hierarchy walk
       # so repeated lookups for the same type in one request are free.
       cache_key = "#{type_name}:#{class_method}:#{include_macros}"
-      if cached = (@methods_cache ||= {} of String => Array(MethodInfo))[cache_key]?
+      cache = (@methods_cache ||= {} of String => Array(MethodInfo))
+      if cached = cache[cache_key]?
         return cached
       end
 
@@ -166,7 +167,7 @@ module Crystalline::Lightweight
       # returns per instantiation. Fill the nil returns so chains through
       # delegated methods keep resolving post-compile.
       methods = fill_summary_returns(methods, type_name)
-      @methods_cache.not_nil![cache_key] = methods
+      cache[cache_key] = methods
       methods
     end
 
@@ -279,7 +280,8 @@ module Crystalline::Lightweight
       end
 
       cache_key = "#{type_name}:#{method_name}:#{class_method}"
-      if cached = (@contracts_cache ||= {} of String => Array(MethodContract))[cache_key]?
+      cache = (@contracts_cache ||= {} of String => Array(MethodContract))
+      if cached = cache[cache_key]?
         return cached
       end
 
@@ -314,7 +316,7 @@ module Crystalline::Lightweight
         end
       end
 
-      @contracts_cache.not_nil![cache_key] = contracts
+      cache[cache_key] = contracts
       contracts
     end
 
@@ -427,8 +429,8 @@ module Crystalline::Lightweight
         methods.concat(select_methods(generic_type.methods, generic_type, class_method, include_macros).map { |method|
           specialize_method(method, owner_name: type_name, mapping: mapping)
         })
-        parent_types.concat(generic_type.parent_types.map do |parent_type|
-          substitute_type_vars(parent_type, mapping).not_nil!
+        parent_types.concat(generic_type.parent_types.compact_map do |parent_type|
+          substitute_type_vars(parent_type, mapping)
         end)
         merge_delegated_methods(generic_type, methods, class_method, include_macros, visited, mapping, type_name)
       elsif type = find_type(type_name)
