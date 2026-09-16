@@ -110,19 +110,7 @@ module Crystalline::Analysis
     raise result if result.is_a? Exception
 
     unless ignore_diagnostics
-      result.program.requires.each do |path|
-        diagnostics.init_value("file://#{path}")
-      end
-
-      result.program.error_stack.try &.each do |e|
-        next unless e.is_a?(Crystal::TypeException) || e.is_a?(Crystal::SyntaxException)
-        # The error-tolerant semantic can emit bogus errors inside the stdlib's
-        # llvm wrapper (e.g. Bool-to-Int32 conversions that a regular compile
-        # never reports, see di_builder.cr). Real user-facing errors surface at
-        # the user's call site instead, so these are safe to skip.
-        next if stdlib_llvm_error?(e)
-        diagnostics.append_from_exception(e)
-      end
+      process_diagnostics(result, diagnostics)
     end
 
     result
@@ -137,6 +125,22 @@ module Crystalline::Analysis
   ensure
     # Propagate diagnostics to the client.
     diagnostics.try &.publish(server) unless ignore_diagnostics
+  end
+
+  private def self.process_diagnostics(result : Crystal::Compiler::Result, diagnostics : Diagnostics)
+    result.program.requires.each do |path|
+      diagnostics.init_value("file://#{path}")
+    end
+
+    result.program.error_stack.try &.each do |e|
+      next unless e.is_a?(Crystal::TypeException) || e.is_a?(Crystal::SyntaxException)
+      # The error-tolerant semantic can emit bogus errors inside the stdlib's
+      # llvm wrapper (e.g. Bool-to-Int32 conversions that a regular compile
+      # never reports, see di_builder.cr). Real user-facing errors surface at
+      # the user's call site instead, so these are safe to skip.
+      next if stdlib_llvm_error?(e)
+      diagnostics.append_from_exception(e)
+    end
   end
 
   # True when the error is located inside the stdlib's llvm wrapper, where the
@@ -168,67 +172,97 @@ module Crystalline::Analysis
     nodes, context = CursorVisitor.new(location).process(result)
     nodes.last?.try { |node|
       LSP::Log.debug { "Class of node at cursor: #{node.class} " }
-      locations = begin
-        if node.is_a? Crystal::Call
-          if defs = node.target_defs
-            defs.compact_map { |d|
-              start_location = d.location.try { |loc| loc.expanded_location || loc }
-              end_location = d.end_location.try { |loc| loc.expanded_location || loc }
-              {start_location, end_location} if start_location && end_location
-            }
-          elsif expanded_macro = node.expanded_macro
-            start_location = expanded_macro.location.try { |loc| loc.expanded_location || loc }
-            if start_location
-              end_location = expanded_macro.end_location.try { |loc| loc.expanded_location || loc } || start_location
-              [{start_location, end_location}]
-            end
-          end
-        elsif node.is_a? Crystal::Require
-          location = node.location
-          filename = node.string
-          relative_to = location.try &.original_filename
-          filenames = result.program.find_in_path(filename, relative_to)
-          filenames.try &.map { |path|
-            location = Crystal::Location.new(
-              path,
-              line_number: 1,
-              column_number: 1
-            )
-            {location, location}
-          }
-        elsif node.is_a? Crystal::Path
-          Utils.locations_from_path(node, nodes)
-        elsif node.is_a? Crystal::Union
-          Utils.locations_from_union(node, nodes)
-        elsif node.is_a? Crystal::Var
-          if definition = context[node.to_s]?
-            _, location = definition
-            [{location, location}] if location
-          end
-        elsif node.is_a? Crystal::InstanceVar
-          if ivar = context["self"]?.try &.[0].try &.lookup_instance_var? node.name
-            if location = ivar.location
-              [{location, location}]
-            end
-          end
-        elsif node.is_a? Crystal::ClassVar
-          if cvar = context["self"]?.try &.[0].try &.all_class_vars[node.name]? # lookup_raw_class_var? node.name
-            if location = cvar.location
-              [{location, location}]
-            end
-          end
-        end
-      end
-
+      locations = get_locations_for_node(node, result, nodes, context)
       Definitions.new(node: node, locations: locations)
     }
   end
 
+  private def self.get_locations_for_node(node : Crystal::ASTNode, result : Crystal::Compiler::Result, nodes : Array(Crystal::ASTNode), context : Hash(String, {Crystal::Type?, Crystal::Location?}))
+    case node
+    when Crystal::Call
+      locations_for_call(node)
+    when Crystal::Require
+      locations_for_require(node, result)
+    when Crystal::Path
+      Utils.locations_from_path(node, nodes)
+    when Crystal::Union
+      Utils.locations_from_union(node, nodes)
+    when Crystal::Var
+      locations_for_var(node, context)
+    when Crystal::InstanceVar
+      locations_for_ivar(node, context)
+    when Crystal::ClassVar
+      locations_for_cvar(node, context)
+    end
+  end
+
+  private def self.locations_for_call(node : Crystal::Call)
+    if defs = node.target_defs
+      locations_for_target_defs(defs)
+    elsif expanded_macro = node.expanded_macro
+      locations_for_expanded_macro(expanded_macro)
+    end
+  end
+
+  private def self.locations_for_target_defs(defs)
+    defs.compact_map { |target_def|
+      start_location = target_def.location.try { |loc| loc.expanded_location || loc }
+      end_location = target_def.end_location.try { |loc| loc.expanded_location || loc }
+      {start_location, end_location} if start_location && end_location
+    }
+  end
+
+  private def self.locations_for_expanded_macro(expanded_macro)
+    start_location = expanded_macro.location.try { |loc| loc.expanded_location || loc }
+    if start_location
+      end_location = expanded_macro.end_location.try { |loc| loc.expanded_location || loc } || start_location
+      [{start_location, end_location}]
+    end
+  end
+
+  private def self.locations_for_require(node : Crystal::Require, result : Crystal::Compiler::Result)
+    location = node.location
+    filename = node.string
+    relative_to = location.try &.original_filename
+    filenames = result.program.find_in_path(filename, relative_to)
+    filenames.try &.map { |path|
+      location = Crystal::Location.new(
+        path,
+        line_number: 1,
+        column_number: 1
+      )
+      {location, location}
+    }
+  end
+
+  private def self.locations_for_var(node : Crystal::Var, context : Hash(String, {Crystal::Type?, Crystal::Location?}))
+    if definition = context[node.to_s]?
+      _, location = definition
+      [{location, location}] if location
+    end
+  end
+
+  private def self.locations_for_ivar(node : Crystal::InstanceVar, context : Hash(String, {Crystal::Type?, Crystal::Location?}))
+    if ivar = context["self"]?.try &.[0].try &.lookup_instance_var? node.name
+      if location = ivar.location
+        [{location, location}]
+      end
+    end
+  end
+
+  private def self.locations_for_cvar(node : Crystal::ClassVar, context : Hash(String, {Crystal::Type?, Crystal::Location?}))
+    if cvar = context["self"]?.try &.[0].try &.all_class_vars[node.name]? # lookup_raw_class_var? node.name
+      if location = cvar.location
+        [{location, location}]
+      end
+    end
+  end
+
   def self.all_defs(type, *, accumulator = [] of {String, Crystal::Def, Crystal::Type, Int32}, nesting = 0)
     if type.is_a? Crystal::UnionType
-      # TODO: intersection instead of union
-      type.union_types.each { |t|
-        all_defs(t, accumulator: accumulator, nesting: nesting)
+      # todo: intersection instead of union
+      type.union_types.each { |union_type|
+        all_defs(union_type, accumulator: accumulator, nesting: nesting)
       }
       return accumulator.uniq &.[1]
     end
@@ -257,8 +291,8 @@ module Crystalline::Analysis
 
   def self.all_macros(type, *, accumulator = [] of {String, Crystal::Macro, Crystal::Type, Int32}, nesting = 0)
     if type.is_a? Crystal::UnionType
-      type.union_types.each { |t|
-        all_macros(t, accumulator: accumulator, nesting: nesting)
+      type.union_types.each { |union_type|
+        all_macros(union_type, accumulator: accumulator, nesting: nesting)
       }
       return accumulator.uniq &.[0]
     end

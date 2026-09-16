@@ -69,7 +69,7 @@ module Crystalline::Lightweight
         index.types.each do |name, type|
           if existing = merged.types[name]?
             type.methods.each do |method|
-              if existing_index = existing.methods.index { |m| same_method?(m, method) }
+              if existing_index = existing.methods.index { |method_info| same_method?(method_info, method) }
                 # The compiled (semantic) def often drops the block
                 # restriction (`(T -> _)`); the source-derived one carries
                 # the real declaration. Prefer the richer method.
@@ -90,8 +90,8 @@ module Crystalline::Lightweight
                 existing.methods << method
               end
             end
-            type.parent_types.each { |p| existing.parent_types << p unless existing.parent_types.includes?(p) }
-            type.subtypes.each { |s| existing.subtypes << s unless existing.subtypes.includes?(s) }
+            type.parent_types.each { |parent| existing.parent_types << parent unless existing.parent_types.includes?(parent) }
+            type.subtypes.each { |subtype| existing.subtypes << subtype unless existing.subtypes.includes?(subtype) }
             type.ivars.each { |k, v| (existing.ivars[k] ||= [] of String).concat(v).uniq! }
             type.class_vars.each { |k, v| (existing.class_vars[k] ||= [] of String).concat(v).uniq! }
             type.delegates.each { |k, v| existing.delegates[k] = v unless existing.delegates.has_key?(k) }
@@ -150,99 +150,102 @@ module Crystalline::Lightweight
 
     protected def index_syntax_node(node : Crystal::ASTNode, namespace : String? = nil)
       case node
-      when Crystal::Expressions
-        node.expressions.each { |expression| index_syntax_node(expression, namespace) }
-      when Crystal::Assign
-        # `COLORS = %w(...)` — a top-level word-list constant that macro
-        # loops iterate (`{% for name in COLORS %}`).
-        index_constant_word_list(node)
-      when Crystal::VisibilityModifier
-        if assign = node.exp.as?(Crystal::Assign)
-          index_constant_word_list(assign)
-        end
-        index_syntax_node(node.exp, namespace)
-      when Crystal::ClassDef
-        type_name = qualify_type_name(generic_type_name(node.name, node.type_vars), namespace)
-        type_info = (@types[type_name] ||= TypeInfo.new(type_name, node.struct? ? TypeKind::Struct : TypeKind::Class, node.doc, node.location, node.name_location))
-        if superclass = node.superclass
-          superclass_name = superclass.to_s
-          type_info.parent_types << superclass_name unless type_info.parent_types.includes?(superclass_name)
-        elsif node.struct?
-          # A struct without a superclass implicitly extends Struct
-          # (and thus Reference/Object): record it so `try`,
-          # `not_nil!`, ... resolve on structs.
-          type_info.parent_types << "Struct" unless type_info.parent_types.includes?("Struct")
-        else
-          # A class without a superclass implicitly extends Reference (and
-          # thus Object): record it so Object's methods (`not_nil!`, `try`,
-          # ...) resolve on every class.
-          type_info.parent_types << "Reference" unless type_info.parent_types.includes?("Reference")
-        end
-        index_syntax_type_body(type_info, node.body, type_name)
-        # `new` is compiler-synthesized from `initialize`: synthesize a
-        # class method so `Class.` completion and hovers offer it.
-        index_new_method(type_info, type_name)
-      when Crystal::ModuleDef
-        type_name = qualify_type_name(generic_type_name(node.name, node.type_vars), namespace)
-        type_info = (@types[type_name] ||= TypeInfo.new(type_name, TypeKind::Module, node.doc, node.location, node.name_location))
-        index_syntax_type_body(type_info, node.body, type_name)
-      when Crystal::EnumDef
-        type_name = qualify_type_name(node.name.to_s, namespace)
-        type_info = (@types[type_name] ||= TypeInfo.new(type_name, TypeKind::Enum, node.doc, node.location, node.name_location))
-        # An enum without an explicit superclass implicitly extends Enum
-        # (and thus Value/Object): record it so `to_s`, `try`, ... resolve.
-        type_info.parent_types << "Enum" unless type_info.parent_types.includes?("Enum")
-        # Enum members are constants: record them as subtypes so
-        # `Enum::` completion offers the members. Crystal's `enum` macro
-        # also generates a `member?` predicate for every member (e.g.
-        # `DelimiterStart` -> `delimiter_start?`): synthesize them too,
-        # since macro-generated defs never appear in the source walk.
-        node.members.each do |member|
-          member_name = case member
-                        when Crystal::Arg
-                          member.name
-                        when Crystal::Path
-                          member.to_s
-                        when Crystal::Assign
-                          member.target.is_a?(Crystal::Path) ? member.target.to_s : nil
-                        end
-          next unless member_name
-          type_info.subtypes << member_name unless type_info.subtypes.includes?(member_name)
-
-          predicate = "#{member_name.underscore}?"
-          next if type_info.methods.any? { |m| m.name == predicate }
-          type_info.methods << MethodInfo.new(
-            name: predicate,
-            owner: type_name,
-            args: [] of ArgInfo,
-            return_type: "Bool",
-          )
-        end
-      when Crystal::AnnotationDef
-        type_name = qualify_type_name(node.name.to_s, namespace)
-        @types[type_name] ||= TypeInfo.new(type_name, TypeKind::Annotation, node.doc, node.location, node.name_location)
-      when Crystal::Alias
-        # An alias is a first-class type name: methods resolve through the
-        # aliased type (its parent), so `Alias.` completes like the target.
-        type_name = qualify_type_name(node.name.to_s, namespace)
-        type_info = (@types[type_name] ||= TypeInfo.new(type_name, TypeKind::Alias, node.doc, node.location, node.name_location))
-        aliased_name = node.value.to_s
-        type_info.parent_types << aliased_name unless type_info.parent_types.includes?(aliased_name)
-      when Crystal::Def
-        return if node.receiver
-        @top_level_methods << method_info_for(node, owner: "::")
-      when Crystal::Macro
-        # `macro finished` bodies (the LSP shard's request classes)
-        # expand at compile time into real classes under the current
-        # namespace. The body is raw macro text (MacroLiterals):
-        # re-parse each literal and index whatever parses cleanly, so
-        # those classes and their accessors (`property params`) resolve
-        # before the first compile.
-        index_macro_body(node.body, namespace)
-      when Crystal::Call
-        # A top-level `record Foo, ...` parses as a call.
-        index_record_call(node, namespace)
+      when Crystal::Expressions, Crystal::Assign, Crystal::VisibilityModifier, Crystal::Def, Crystal::Macro, Crystal::Call
+        index_syntax_node_statement(node, namespace)
+      when Crystal::ClassDef, Crystal::ModuleDef, Crystal::EnumDef, Crystal::AnnotationDef, Crystal::Alias
+        index_syntax_node_type(node, namespace)
       end
+    end
+
+    private def index_syntax_node_statement(node : Crystal::ASTNode, namespace : String?)
+      case node
+      when Crystal::Expressions        then node.expressions.each { |e| index_syntax_node(e, namespace) }
+      when Crystal::Assign             then index_constant_word_list(node)
+      when Crystal::VisibilityModifier then index_visibility_modifier(node, namespace)
+      when Crystal::Def                then index_def_node(node)
+      when Crystal::Macro              then index_macro_body(node.body, namespace)
+      when Crystal::Call               then index_record_call(node, namespace)
+      end
+    end
+
+    private def index_syntax_node_type(node : Crystal::ASTNode, namespace : String?)
+      case node
+      when Crystal::ClassDef      then index_class_def(node, namespace)
+      when Crystal::ModuleDef     then index_module_def(node, namespace)
+      when Crystal::EnumDef       then index_enum_def(node, namespace)
+      when Crystal::AnnotationDef then index_annotation_def(node, namespace)
+      when Crystal::Alias         then index_alias_def(node, namespace)
+      end
+    end
+
+    private def index_visibility_modifier(node : Crystal::VisibilityModifier, namespace : String?)
+      if assign = node.exp.as?(Crystal::Assign)
+        index_constant_word_list(assign)
+      end
+      index_syntax_node(node.exp, namespace)
+    end
+
+    private def index_def_node(node : Crystal::Def)
+      return if node.receiver
+      @top_level_methods << method_info_for(node, owner: "::")
+    end
+
+    private def index_class_def(node : Crystal::ClassDef, namespace : String?)
+      type_name = qualify_type_name(generic_type_name(node.name, node.type_vars), namespace)
+      type_info = (@types[type_name] ||= TypeInfo.new(type_name, node.struct? ? TypeKind::Struct : TypeKind::Class, node.doc, node.location, node.name_location))
+      if superclass = node.superclass
+        superclass_name = superclass.to_s
+        type_info.parent_types << superclass_name unless type_info.parent_types.includes?(superclass_name)
+      elsif node.struct?
+        type_info.parent_types << "Struct" unless type_info.parent_types.includes?("Struct")
+      else
+        type_info.parent_types << "Reference" unless type_info.parent_types.includes?("Reference")
+      end
+      index_syntax_type_body(type_info, node.body, type_name)
+      index_new_method(type_info, type_name)
+    end
+
+    private def index_module_def(node : Crystal::ModuleDef, namespace : String?)
+      type_name = qualify_type_name(generic_type_name(node.name, node.type_vars), namespace)
+      type_info = (@types[type_name] ||= TypeInfo.new(type_name, TypeKind::Module, node.doc, node.location, node.name_location))
+      index_syntax_type_body(type_info, node.body, type_name)
+    end
+
+    private def index_enum_def(node : Crystal::EnumDef, namespace : String?)
+      type_name = qualify_type_name(node.name.to_s, namespace)
+      type_info = (@types[type_name] ||= TypeInfo.new(type_name, TypeKind::Enum, node.doc, node.location, node.name_location))
+      type_info.parent_types << "Enum" unless type_info.parent_types.includes?("Enum")
+
+      node.members.each do |member|
+        member_name = case member
+                      when Crystal::Arg    then member.name
+                      when Crystal::Path   then member.to_s
+                      when Crystal::Assign then member.target.is_a?(Crystal::Path) ? member.target.to_s : nil
+                      end
+        next unless member_name
+        type_info.subtypes << member_name unless type_info.subtypes.includes?(member_name)
+
+        predicate = "#{member_name.underscore}?"
+        next if type_info.methods.any? { |method_info| method_info.name == predicate }
+        type_info.methods << MethodInfo.new(
+          name: predicate,
+          owner: type_name,
+          args: [] of ArgInfo,
+          return_type: "Bool",
+        )
+      end
+    end
+
+    private def index_annotation_def(node : Crystal::AnnotationDef, namespace : String?)
+      type_name = qualify_type_name(node.name.to_s, namespace)
+      @types[type_name] ||= TypeInfo.new(type_name, TypeKind::Annotation, node.doc, node.location, node.name_location)
+    end
+
+    private def index_alias_def(node : Crystal::Alias, namespace : String?)
+      type_name = qualify_type_name(node.name.to_s, namespace)
+      type_info = (@types[type_name] ||= TypeInfo.new(type_name, TypeKind::Alias, node.doc, node.location, node.name_location))
+      aliased_name = node.value.to_s
+      type_info.parent_types << aliased_name unless type_info.parent_types.includes?(aliased_name)
     end
 
     protected def index_macro_body(node : Crystal::ASTNode, namespace : String?)
@@ -365,23 +368,24 @@ module Crystalline::Lightweight
       when Crystal::Path
         @constant_word_lists[node.to_s]? || [] of String
       when Crystal::Call
-        # `{% for mode in Mode.constants.reject {...} %}` — the enum's
-        # member names (recorded as subtypes by index_syntax_node) are the
-        # words; the stdlib's All/None sentinels never appear as members.
-        collection = node
-        collection = collection.obj if collection.name == "reject" && collection.obj
-        if collection.is_a?(Crystal::Call) && collection.name == "constants"
-          if enum_path = collection.obj.as?(Crystal::Path)
-            enum_name = @types.keys.find { |key| key == enum_path.to_s || key.ends_with?("::#{enum_path}") }
-            if enum_name && (enum_type = @types[enum_name]?)
-              return enum_type.subtypes
-            end
-          end
-        end
-        [] of String
+        macro_for_words_from_call(node)
       else
         [] of String
       end
+    end
+
+    private def macro_for_words_from_call(node : Crystal::Call) : Array(String)
+      collection = node
+      collection = collection.obj.as(Crystal::Call) if collection.name == "reject" && collection.obj.is_a?(Crystal::Call)
+      if collection.is_a?(Crystal::Call) && collection.name == "constants"
+        if enum_path = collection.obj.as?(Crystal::Path)
+          enum_name = @types.keys.find { |key| key == enum_path.to_s || key.ends_with?("::#{enum_path}") }
+          if enum_name && (enum_type = @types[enum_name]?)
+            return enum_type.subtypes
+          end
+        end
+      end
+      [] of String
     end
 
     # `COLORS = %w(default red ...)` — records the word list under the
@@ -404,84 +408,69 @@ module Crystalline::Lightweight
       case node
       when Crystal::Expressions
         node.expressions.each do |expression|
-          case expression
-          when Crystal::Def
-            type_info.methods << method_info_for(expression, owner: type_name, class_method: !expression.receiver.nil?)
-            index_ivar_assignments(expression.body, type_info)
-            index_shorthand_ivar_args(expression, type_info)
-          when Crystal::VisibilityModifier
-            # `private def` / `protected def` wrap the def in a VisibilityModifier.
-            if inner_def = expression.exp.as?(Crystal::Def)
-              type_info.methods << method_info_for(inner_def, owner: type_name, class_method: !inner_def.receiver.nil?)
-              index_ivar_assignments(inner_def.body, type_info)
-              index_shorthand_ivar_args(inner_def, type_info)
-            elsif assign = expression.exp.as?(Crystal::Assign)
-              index_constant_word_list(assign)
-            end
-          when Crystal::ClassDef, Crystal::ModuleDef, Crystal::EnumDef, Crystal::AnnotationDef
-            index_nested_type(expression, type_info, type_name)
-          when Crystal::Call
-            index_accessor_call(expression, type_info, type_name)
-            index_record_call(expression, type_name)
-            index_delegate_call(expression, type_info)
-          when Crystal::Alias
-            index_alias(expression, type_name)
-          when Crystal::Include, Crystal::Extend
-            index_include(expression, type_info)
-          when Crystal::Macro
-            # `macro finished` bodies (the LSP shard's request classes)
-            # expand into classes under this type's namespace: index
-            # them so `LSP::HoverRequest` and its accessors resolve.
-            index_macro_body(expression.body, type_name)
-          when Crystal::TypeDeclaration
-            index_ivar_declaration(expression, type_info)
-          when Crystal::Assign
-            index_ivar_assignment(expression, type_info)
-          when Crystal::MacroIf
-            # `{% if flag?(:preview_mt) %}` branches contain real code, but
-            # the parser captures the branch as raw MacroLiteral text (it
-            # cannot evaluate the condition): re-parse each side and index
-            # it as type-body code (class vars, ivars, defs).
-            index_macro_branch(expression.then, type_info, type_name)
-            expression.else.try { |e| index_macro_branch(e, type_info, type_name) }
-          when Crystal::MacroFor
-            index_macro_for(expression, type_info, type_name)
-          end
+          index_syntax_type_body_node(type_info, expression, type_name)
         end
+      else
+        index_syntax_type_body_node(type_info, node, type_name)
+      end
+    end
+
+    private def index_syntax_type_body_node(type_info : TypeInfo, node : Crystal::ASTNode, type_name : String)
+      case node
+      when Crystal::Def, Crystal::VisibilityModifier, Crystal::Call, Crystal::Macro, Crystal::TypeDeclaration, Crystal::Assign, Crystal::MacroIf, Crystal::MacroFor
+        index_syntax_type_body_statement(type_info, node, type_name)
+      when Crystal::ClassDef, Crystal::ModuleDef, Crystal::EnumDef, Crystal::AnnotationDef, Crystal::Alias, Crystal::Include, Crystal::Extend
+        index_syntax_type_body_type(type_info, node, type_name)
+      end
+    end
+
+    private def index_syntax_type_body_statement(type_info : TypeInfo, node : Crystal::ASTNode, type_name : String)
+      case node
       when Crystal::Def
         type_info.methods << method_info_for(node, owner: type_name, class_method: !node.receiver.nil?)
         index_ivar_assignments(node.body, type_info)
+        index_shorthand_ivar_args(node, type_info)
       when Crystal::VisibilityModifier
         if inner_def = node.exp.as?(Crystal::Def)
           type_info.methods << method_info_for(inner_def, owner: type_name, class_method: !inner_def.receiver.nil?)
           index_ivar_assignments(inner_def.body, type_info)
+          index_shorthand_ivar_args(inner_def, type_info)
+        elsif assign = node.exp.as?(Crystal::Assign)
+          index_constant_word_list(assign)
         end
-      when Crystal::ClassDef, Crystal::ModuleDef, Crystal::EnumDef, Crystal::AnnotationDef
-        # A body consisting of a single nested type is not wrapped in Expressions.
-        index_nested_type(node, type_info, type_name)
       when Crystal::Call
-        # A body consisting of a single accessor macro call.
         index_accessor_call(node, type_info, type_name)
         index_record_call(node, type_name)
         index_delegate_call(node, type_info)
-      when Crystal::Alias
-        index_alias(node, type_name)
-      when Crystal::Include, Crystal::Extend
-        index_include(node, type_info)
-      when Crystal::Macro
-        # A body consisting of a single `macro finished` block.
-        index_macro_body(node.body, type_name)
-      when Crystal::MacroIf
-        # A body consisting of a single `{% if %}` branch.
-        index_macro_branch(node.then, type_info, type_name)
-        node.else.try { |e| index_macro_branch(e, type_info, type_name) }
-      when Crystal::MacroFor
-        # A body consisting of a single `{% for %}` loop.
-        index_macro_for(node, type_info, type_name)
       when Crystal::TypeDeclaration
         index_ivar_declaration(node, type_info)
       when Crystal::Assign
         index_ivar_assignment(node, type_info)
+      when Crystal::Macro, Crystal::MacroIf, Crystal::MacroFor
+        index_syntax_type_body_macro(type_info, node, type_name)
+      end
+    end
+
+    private def index_syntax_type_body_macro(type_info : TypeInfo, node : Crystal::ASTNode, type_name : String)
+      case node
+      when Crystal::Macro
+        index_macro_body(node.body, type_name)
+      when Crystal::MacroIf
+        index_macro_branch(node.then, type_info, type_name)
+        node.else.try { |e| index_macro_branch(e, type_info, type_name) }
+      when Crystal::MacroFor
+        index_macro_for(node, type_info, type_name)
+      end
+    end
+
+    private def index_syntax_type_body_type(type_info : TypeInfo, node : Crystal::ASTNode, type_name : String)
+      case node
+      when Crystal::ClassDef, Crystal::ModuleDef, Crystal::EnumDef, Crystal::AnnotationDef
+        index_nested_type(node, type_info, type_name)
+      when Crystal::Alias
+        index_alias(node, type_name)
+      when Crystal::Include, Crystal::Extend
+        index_include(node, type_info)
       end
     end
 
@@ -517,19 +506,19 @@ module Crystalline::Lightweight
       case node
       when Crystal::Call
         node.obj.try { |obj| syntax_value_type_name(obj) }
-      when Crystal::Path
+      when Crystal::Path, Crystal::Generic
         node.to_s
-      when Crystal::Generic
-        # `Hash(String, {Crystal::Type?, Crystal::Location?}).new`
-        node.to_s
-      when Crystal::StringLiteral then "String"
-      when Crystal::BoolLiteral   then "Bool"
-      when Crystal::NumberLiteral then "Number"
-      when Crystal::NilLiteral    then "Nil"
+      when Crystal::ArrayLiteral, Crystal::HashLiteral, Crystal::TupleLiteral, Crystal::NamedTupleLiteral
+        syntax_value_collection_type_name(node)
+      when Crystal::StringLiteral, Crystal::BoolLiteral, Crystal::NumberLiteral, Crystal::NilLiteral, Crystal::RangeLiteral, Crystal::RegexLiteral, Crystal::SymbolLiteral
+        syntax_value_scalar_type_name(node)
+      end
+    end
+
+    private def syntax_value_collection_type_name(node : Crystal::ASTNode) : String?
+      case node
       when Crystal::ArrayLiteral
-        # `@array = [] of Item(V)` — the `of` clause names the element
-        # type so delegated/typed receivers resolve (`Array(Item(V))`).
-        node.of.try { |of| "Array(#{of})" } || "Array"
+        node.of.try { |of_type| "Array(#{of_type})" } || "Array"
       when Crystal::HashLiteral
         if entry = node.of
           "Hash(#{entry.key}, #{entry.value})"
@@ -538,9 +527,18 @@ module Crystalline::Lightweight
         end
       when Crystal::TupleLiteral      then "Tuple"
       when Crystal::NamedTupleLiteral then "NamedTuple"
-      when Crystal::RangeLiteral      then "Range"
-      when Crystal::RegexLiteral      then "Regex"
-      when Crystal::SymbolLiteral     then "Symbol"
+      end
+    end
+
+    private def syntax_value_scalar_type_name(node : Crystal::ASTNode) : String?
+      case node
+      when Crystal::StringLiteral then "String"
+      when Crystal::BoolLiteral   then "Bool"
+      when Crystal::NumberLiteral then "Number"
+      when Crystal::NilLiteral    then "Nil"
+      when Crystal::RangeLiteral  then "Range"
+      when Crystal::RegexLiteral  then "Regex"
+      when Crystal::SymbolLiteral then "Symbol"
       end
     end
 
@@ -553,27 +551,25 @@ module Crystalline::Lightweight
       when Crystal::Assign, Crystal::OpAssign
         index_ivar_assignment(node, type_info)
       when Crystal::Call
-        # A block-carrying call statement (`@items.each do |item| ... end`):
-        # descend into the block so ivars assigned inside it are indexed.
         node.block.try { |block| index_ivar_assignments(block, type_info) }
+      when Crystal::ExceptionHandler, Crystal::If, Crystal::Unless, Crystal::Case, Crystal::While, Crystal::Until, Crystal::Block
+        index_ivar_assignments_control_flow(node, type_info)
+      end
+    end
+
+    private def index_ivar_assignments_control_flow(node : Crystal::ASTNode, type_info : TypeInfo)
+      case node
       when Crystal::ExceptionHandler
         index_ivar_assignments(node.body, type_info)
         node.rescues.try { |rescues| rescues.each { |rescue_clause| index_ivar_assignments(rescue_clause.body, type_info) } }
         node.else.try { |else_node| index_ivar_assignments(else_node, type_info) }
-      when Crystal::If
-        index_ivar_assignments(node.then, type_info)
-        index_ivar_assignments(node.else, type_info)
-      when Crystal::Unless
+      when Crystal::If, Crystal::Unless
         index_ivar_assignments(node.then, type_info)
         index_ivar_assignments(node.else, type_info)
       when Crystal::Case
         node.whens.each { |a_when| index_ivar_assignments(a_when.body, type_info) }
-        if e = node.else
-          index_ivar_assignments(e, type_info)
-        end
-      when Crystal::While, Crystal::Until
-        index_ivar_assignments(node.body, type_info)
-      when Crystal::Block
+        node.else.try { |e| index_ivar_assignments(e, type_info) }
+      when Crystal::While, Crystal::Until, Crystal::Block
         index_ivar_assignments(node.body, type_info)
       end
     end
@@ -601,8 +597,8 @@ module Crystalline::Lightweight
     # method so `Class.` completion and hovers offer it. Args come from
     # the class's own `initialize` when present, otherwise `new` is bare.
     private def index_new_method(type_info : TypeInfo, type_name : String)
-      return if type_info.methods.any? { |m| m.class_method && m.name == "new" }
-      initialize_method = type_info.methods.find { |m| !m.class_method && m.name == "initialize" }
+      return if type_info.methods.any? { |method_info| method_info.class_method && method_info.name == "new" }
+      initialize_method = type_info.methods.find { |method_info| !method_info.class_method && method_info.name == "initialize" }
       type_info.methods << MethodInfo.new(
         name: "new",
         owner: type_name,
@@ -676,7 +672,7 @@ module Crystalline::Lightweight
         next unless field_name
         restriction = arg.is_a?(Crystal::TypeDeclaration) ? arg.declared_type.to_s : arg.as(Crystal::Arg).restriction.try(&.to_s)
         fields << {field_name, restriction}
-        next if record_info.methods.any? { |m| m.name == field_name }
+        next if record_info.methods.any? { |method_info| method_info.name == field_name }
         record_info.methods << MethodInfo.new(
           name: field_name,
           owner: record_name,
@@ -690,7 +686,7 @@ module Crystalline::Lightweight
 
       # The record macro also generates `new(field, ...)`: index it so
       # `MethodInfo.new(...)` hovers and resolves its return type.
-      return if record_info.methods.any? { |m| m.name == "new" && m.class_method }
+      return if record_info.methods.any? { |method_info| method_info.name == "new" && method_info.class_method }
       record_info.methods << MethodInfo.new(
         name: "new",
         owner: record_name,
@@ -715,50 +711,49 @@ module Crystalline::Lightweight
       kind = base_name.rchop("?").rchop("!")
 
       call.args.each do |arg|
-        name, restriction = accessor_arg_info(arg, type_info)
-        next unless name
+        index_accessor_arg(arg, call, type_info, type_name, kind, predicate, class_method)
+      end
+    end
 
-        if kind == "getter" || kind == "property"
-          method_name = predicate ? "#{name}?" : name
-          type_info.methods << MethodInfo.new(
-            name: method_name,
-            owner: type_name,
-            args: [] of ArgInfo,
-            return_type: restriction,
-            class_method: class_method,
-            doc: call.doc,
-            location: call.location,
-            name_location: call.location,
-            name_size: method_name.size,
-          )
+    private def index_accessor_arg(arg : Crystal::ASTNode, call : Crystal::Call, type_info : TypeInfo, type_name : String, kind : String, predicate : Bool, class_method : Bool)
+      name, restriction = accessor_arg_info(arg, type_info)
+      return unless name
 
-          # A getter is backed by `@name`: record the ivar so `@name.`
-          # receivers resolve before any assignment is seen (the getter
-          # macro declares it, e.g. `getter root_uri : URI?`).
-          if !class_method && restriction
-            (type_info.ivars["@#{name}"] ||= [] of String) << restriction
-          end
-          # A class getter is backed by `@@name`: record the cvar too
-          # (`class_getter compilation_lock = Mutex.new`).
-          if class_method && restriction
-            (type_info.class_vars["@@#{name}"] ||= [] of String) << restriction
-          end
+      if kind == "getter" || kind == "property"
+        method_name = predicate ? "#{name}?" : name
+        type_info.methods << MethodInfo.new(
+          name: method_name,
+          owner: type_name,
+          args: [] of ArgInfo,
+          return_type: restriction,
+          class_method: class_method,
+          doc: call.doc,
+          location: call.location,
+          name_location: call.location,
+          name_size: method_name.size,
+        )
+
+        if !class_method && restriction
+          (type_info.ivars["@#{name}"] ||= [] of String) << restriction
         end
-
-        if kind == "setter" || kind == "property"
-          method_name = "#{name}="
-          type_info.methods << MethodInfo.new(
-            name: method_name,
-            owner: type_name,
-            args: [ArgInfo.new(name: "value", restriction: restriction)],
-            return_type: restriction,
-            class_method: class_method,
-            doc: call.doc,
-            location: call.location,
-            name_location: call.location,
-            name_size: method_name.size,
-          )
+        if class_method && restriction
+          (type_info.class_vars["@@#{name}"] ||= [] of String) << restriction
         end
+      end
+
+      if kind == "setter" || kind == "property"
+        method_name = "#{name}="
+        type_info.methods << MethodInfo.new(
+          name: method_name,
+          owner: type_name,
+          args: [ArgInfo.new(name: "value", restriction: restriction)],
+          return_type: restriction,
+          class_method: class_method,
+          doc: call.doc,
+          location: call.location,
+          name_location: call.location,
+          name_size: method_name.size,
+        )
       end
     end
 
@@ -856,7 +851,7 @@ module Crystalline::Lightweight
     private def accessor_initializer_type(node : Crystal::ASTNode) : String?
       case node
       when Crystal::ArrayLiteral
-        node.of.try { |of| "Array(#{of})" }
+        node.of.try { |of_type| "Array(#{of_type})" }
       when Crystal::HashLiteral
         if entry = node.of
           "Hash(#{entry.key}, #{entry.value})"
@@ -884,7 +879,7 @@ module Crystalline::Lightweight
     # `class Set(T)` parses with the type vars detached from the name: rebuild
     # the generic form (`Set(T)`) so source generics match compiled keys.
     protected def generic_type_name(name : Crystal::Path, type_vars : Array(String)?)
-      return name.to_s unless type_vars && type_vars.any?
+      return name.to_s if type_vars.nil? || type_vars.empty?
       "#{name}(#{type_vars.join(", ")})"
     end
 
@@ -892,6 +887,38 @@ module Crystalline::Lightweight
       type_name = type.to_s
       type_info = (@types[type_name] ||= TypeInfo.new(type_name, kind_for(type), type.doc, type.locations.try(&.first?), type.locations.try(&.first?)))
 
+      index_type_defs(type, type_info, type_name)
+      index_type_macros(type, type_info, type_name) if type.is_a?(Crystal::ModuleType)
+      index_type_metaclass_defs(type, type_info, type_name)
+      index_type_parents(type, type_info)
+      index_type_nested_types(type, type_info)
+
+      # An alias (`alias Mutex = Sync::Mutex`) carries no defs of its own:
+      # method lookups resolve through the aliased type, so record it as the
+      # single parent for the hierarchy walk.
+      if type.is_a?(Crystal::AliasType)
+        if aliased = type.remove_alias
+          aliased_name = aliased.to_s
+          type_info.parent_types << aliased_name unless type_info.parent_types.includes?(aliased_name)
+        end
+      end
+
+      # A constant (`LSP::Log = ::Log.for(self)`) holds an instance of its
+      # value's type: record that type as the single parent so the resolver
+      # resolves `LSP::Log.info` through the value type's instance methods
+      # instead of the class-method view on the empty shell.
+      if type.is_a?(Crystal::Const)
+        # `type?` (not `type`): macro-only constants (e.g. `SI_PREFIXES`
+        # in stdlib humanize.cr) never get their value bound, and the
+        # compiler's `type` getter raises a BUG on them.
+        if value_type = type.value.try(&.type?)
+          value_type_name = value_type.to_s
+          type_info.parent_types << value_type_name unless type_info.parent_types.includes?(value_type_name)
+        end
+      end
+    end
+
+    private def index_type_defs(type : Crystal::NamedType, type_info : TypeInfo, type_name : String)
       if defs = type.defs
         defs.each_value do |items|
           items.each do |item|
@@ -908,17 +935,19 @@ module Crystalline::Lightweight
           end
         end
       end
+    end
 
-      if type.is_a?(Crystal::ModuleType)
-        if macros = type.macros
-          macros.each_value do |items|
-            items.each do |macro_def|
-              type_info.methods << method_info_for(macro_def, owner: type_name, is_macro: true)
-            end
+    private def index_type_macros(type : Crystal::ModuleType, type_info : TypeInfo, type_name : String)
+      if macros = type.macros
+        macros.each_value do |items|
+          items.each do |macro_def|
+            type_info.methods << method_info_for(macro_def, owner: type_name, is_macro: true)
           end
         end
       end
+    end
 
+    private def index_type_metaclass_defs(type : Crystal::NamedType, type_info : TypeInfo, type_name : String)
       if metaclass = type.metaclass
         if defs = metaclass.defs
           defs.each_value do |items|
@@ -928,40 +957,20 @@ module Crystalline::Lightweight
           end
         end
       end
+    end
 
+    private def index_type_parents(type : Crystal::NamedType, type_info : TypeInfo)
       type.parents.try &.each do |parent_type|
         parent_name = parent_type.to_s
         type_info.parent_types << parent_name unless type_info.parent_types.includes?(parent_name)
       end
+    end
 
-      # An alias (`alias Mutex = Sync::Mutex`) carries no defs of its own:
-      # method lookups resolve through the aliased type, so record it as the
-      # single parent for the hierarchy walk.
-      if type.is_a?(Crystal::AliasType)
-        if aliased = type.remove_alias
-          aliased_name = aliased.to_s
-          type_info.parent_types << aliased_name unless type_info.parent_types.includes?(aliased_name)
-        end
-      end
-
+    private def index_type_nested_types(type : Crystal::NamedType, type_info : TypeInfo)
       if nested_types = type.types?
         nested_types.each_value do |nested_type|
           type_info.subtypes << nested_type.to_s unless type_info.subtypes.includes?(nested_type.to_s)
           index_type(nested_type)
-        end
-      end
-
-      # A constant (`LSP::Log = ::Log.for(self)`) holds an instance of its
-      # value's type: record that type as the single parent so the resolver
-      # resolves `LSP::Log.info` through the value type's instance methods
-      # instead of the class-method view on the empty shell.
-      if type.is_a?(Crystal::Const)
-        # `type?` (not `type`): macro-only constants (e.g. `SI_PREFIXES`
-        # in stdlib humanize.cr) never get their value bound, and the
-        # compiler's `type` getter raises a BUG on them.
-        if value_type = type.value.try(&.type?)
-          value_type_name = value_type.to_s
-          type_info.parent_types << value_type_name unless type_info.parent_types.includes?(value_type_name)
         end
       end
     end
@@ -1008,63 +1017,27 @@ module Crystalline::Lightweight
     # nil, and the caller keeps no return type at all.
     private def syntax_return_type_name(node : Crystal::ASTNode, ivars : Hash(String, Array(String)), owner : String? = nil) : String?
       case node
+      when Crystal::Expressions, Crystal::Return, Crystal::Assign, Crystal::If, Crystal::Var, Crystal::InstanceVar, Crystal::Call
+        syntax_return_type_logic(node, ivars, owner)
+      when Crystal::StringLiteral, Crystal::StringInterpolation, Crystal::NumberLiteral, Crystal::BoolLiteral, Crystal::CharLiteral, Crystal::SymbolLiteral, Crystal::NilLiteral, Crystal::RegexLiteral, Crystal::RangeLiteral, Crystal::TupleLiteral, Crystal::ArrayLiteral
+        syntax_return_type_literal(node, ivars, owner)
+      else
+        nil
+      end
+    end
+
+    private def syntax_return_type_logic(node : Crystal::ASTNode, ivars : Hash(String, Array(String)), owner : String?) : String?
+      case node
       when Crystal::Expressions
         node.expressions.last?.try { |last| syntax_return_type_name(last, ivars, owner) }
       when Crystal::Return
-        if exp = node.exp
-          syntax_return_type_name(exp, ivars, owner)
-        else
-          "Nil"
-        end
+        node.exp.try { |exp| syntax_return_type_name(exp, ivars, owner) } || "Nil"
       when Crystal::Assign
         syntax_return_type_name(node.value, ivars, owner)
       when Crystal::If
-        then_type = (t = node.then) ? syntax_return_type_name(t, ivars, owner) : nil
-        else_type = (e = node.else) ? syntax_return_type_name(e, ivars, owner) : nil
-        if then_type && else_type && then_type != else_type
-          "#{then_type} | #{else_type}"
-        else
-          then_type || else_type
-        end
-      when Crystal::StringLiteral, Crystal::StringInterpolation
-        "String"
+        syntax_return_type_logic_if(node, ivars, owner)
       when Crystal::Var
-        # A body ending in `self` (macro-generated style setters like
-        # Colorize's `def red; @fore = ...; self; end`): the "self"
-        # marker is substituted for the owner by the callers.
         node.name == "self" ? "self" : nil
-      when Crystal::NumberLiteral
-        number_literal_type_name(node)
-      when Crystal::BoolLiteral
-        "Bool"
-      when Crystal::CharLiteral
-        "Char"
-      when Crystal::SymbolLiteral
-        "Symbol"
-      when Crystal::NilLiteral
-        "Nil"
-      when Crystal::RegexLiteral
-        "Regex"
-      when Crystal::RangeLiteral
-        "Range"
-      when Crystal::TupleLiteral
-        # `{@nodes, @context}` — a tuple-valued last expression: record
-        # the element types so multi-assigns (`a, b = ...`) split them.
-        parts = node.elements.compact_map do |element|
-          if part_type = syntax_return_type_name(element, ivars, owner)
-            part_type
-          end
-        end
-        parts.empty? ? nil : "Tuple(#{parts.join(", ")})"
-      when Crystal::ArrayLiteral
-        if of = node.of
-          "Array(#{of.to_s})"
-        elsif element = node.elements.first?
-          element_type = syntax_return_type_name(element, ivars, owner)
-          element_type ? "Array(#{element_type})" : "Array"
-        else
-          "Array"
-        end
       when Crystal::InstanceVar
         ivars[node.name]?.try(&.first?)
       when Crystal::Call
@@ -1074,21 +1047,92 @@ module Crystalline::Lightweight
       end
     end
 
+    private def syntax_return_type_logic_if(node : Crystal::If, ivars : Hash(String, Array(String)), owner : String?) : String?
+      then_type = (t = node.then) ? syntax_return_type_name(t, ivars, owner) : nil
+      else_type = (e = node.else) ? syntax_return_type_name(e, ivars, owner) : nil
+      if then_type && else_type && then_type != else_type
+        "#{then_type} | #{else_type}"
+      else
+        then_type || else_type
+      end
+    end
+
+    private def syntax_return_type_literal(node : Crystal::ASTNode, ivars : Hash(String, Array(String)), owner : String?) : String?
+      case node
+      when Crystal::StringLiteral, Crystal::StringInterpolation then "String"
+      when Crystal::NumberLiteral                               then number_literal_type_name(node)
+      when Crystal::TupleLiteral                                then syntax_return_type_literal_tuple(node, ivars, owner)
+      when Crystal::ArrayLiteral                                then syntax_return_type_literal_array(node, ivars, owner)
+      when Crystal::BoolLiteral, Crystal::CharLiteral, Crystal::SymbolLiteral, Crystal::NilLiteral, Crystal::RegexLiteral, Crystal::RangeLiteral
+        syntax_return_type_literal_simple(node)
+      else
+        nil
+      end
+    end
+
+    private def syntax_return_type_literal_simple(node : Crystal::ASTNode) : String?
+      case node
+      when Crystal::BoolLiteral   then "Bool"
+      when Crystal::CharLiteral   then "Char"
+      when Crystal::SymbolLiteral then "Symbol"
+      when Crystal::NilLiteral    then "Nil"
+      when Crystal::RegexLiteral  then "Regex"
+      when Crystal::RangeLiteral  then "Range"
+      else
+        nil
+      end
+    end
+
+    private def syntax_return_type_literal_tuple(node : Crystal::TupleLiteral, ivars : Hash(String, Array(String)), owner : String?) : String?
+      parts = node.elements.compact_map do |element|
+        syntax_return_type_name(element, ivars, owner)
+      end
+      parts.empty? ? nil : "Tuple(#{parts.join(", ")})"
+    end
+
+    private def syntax_return_type_literal_array(node : Crystal::ArrayLiteral, ivars : Hash(String, Array(String)), owner : String?) : String?
+      if of = node.of
+        "Array(#{of})"
+      elsif element = node.elements.first?
+        element_type = syntax_return_type_name(element, ivars, owner)
+        element_type ? "Array(#{element_type})" : "Array"
+      else
+        "Array"
+      end
+    end
+
     private def syntax_call_return_type_name(node : Crystal::Call, ivars : Hash(String, Array(String)), owner : String? = nil) : String?
       if (path = node.obj).is_a?(Crystal::Path)
-        # `Foo.new` / `Foo(...)` constructors.
         return path.to_s if node.name == "new" || node.name == path.to_s
         return nil
       end
 
+      if type = syntax_call_return_type_special(node, ivars, owner)
+        return type
+      end
+
+      if type = syntax_call_return_type_collection(node, ivars)
+        return type
+      end
+
+      syntax_call_return_type_owner(node, owner)
+    end
+
+    private def syntax_call_return_type_owner(node : Crystal::Call, owner : String?) : String?
+      return nil unless node.obj.nil? && owner
+      return nil unless owner_type = @types[owner]?
+      callee = owner_type.methods.find do |method_info|
+        method_info.name == node.name && !method_info.class_method && method_info.return_type
+      end
+      callee.try(&.return_type)
+    end
+
+    private def syntax_call_return_type_special(node : Crystal::Call, ivars : Hash(String, Array(String)), owner : String?) : String?
       if node.name.in?("try", "tap", "itself", "not_nil!")
         receiver_type = (obj = node.obj) ? syntax_return_type_name(obj, ivars, owner) : nil
         return nil unless receiver_type
         if node.name == "try"
           if block = node.block
-            # `x.try { ... }` returns the block's value, never x: do not
-            # fall back to the receiver type when the block's return is
-            # unknown (a wrong recorded return poisons every caller).
             return syntax_block_return_type_name(block, receiver_type)
           end
         end
@@ -1099,6 +1143,10 @@ module Crystalline::Lightweight
         return "Bool"
       end
 
+      nil
+    end
+
+    private def syntax_call_return_type_collection(node : Crystal::Call, ivars : Hash(String, Array(String))) : String?
       if node.name.in?("[]", "[]?", "fetch") && node.obj.is_a?(Crystal::InstanceVar)
         ivar_name = node.obj.as(Crystal::InstanceVar).name
         ivar_type = ivars[ivar_name]?.try(&.first?)
@@ -1109,44 +1157,23 @@ module Crystalline::Lightweight
           return element_types.join(" | ")
         end
       end
-
-      if node.obj.nil? && owner
-        # A bare call as the last expression (`def italic; mode Mode::Italic;
-        # end`): resolve the callee's recorded return through the owner's
-        # entry so self-returning style setters keep the chain alive.
-        if owner_type = @types[owner]?
-          if callee = owner_type.methods.find { |m| m.name == node.name && !m.class_method && m.return_type }
-            return callee.return_type
-          end
-        end
-      end
-
       nil
     end
 
     private def number_literal_type_name(node : Crystal::NumberLiteral) : String?
       literal = node.to_s
       if literal.includes?('.') || literal.includes?('e') || literal.includes?('f')
-        literal.ends_with?("f32") ? "Float32" : "Float64"
-      elsif literal.ends_with?("u8")
-        "UInt8"
-      elsif literal.ends_with?("u16")
-        "UInt16"
-      elsif literal.ends_with?("u32")
-        "UInt32"
-      elsif literal.ends_with?("u64")
-        "UInt64"
-      elsif literal.ends_with?("i8")
-        "Int8"
-      elsif literal.ends_with?("i16")
-        "Int16"
-      elsif literal.ends_with?("i32")
-        "Int32"
-      elsif literal.ends_with?("i64")
-        "Int64"
-      else
-        "Int32"
+        return literal.ends_with?("f32") ? "Float32" : "Float64"
       end
+
+      %w[u8 u16 u32 u64 i8 i16 i32 i64].each do |suffix|
+        if literal.ends_with?(suffix)
+          type_name = suffix[0] == 'u' ? "UInt" : "Int"
+          return type_name + suffix[1..]
+        end
+      end
+
+      "Int32"
     end
 
     # `x.try &.[0]` — apply the block body (`__arg0[0]`) to the receiver's

@@ -48,6 +48,19 @@ module Crystalline::Lightweight
       # the structural comparisons see plain names.
       normalized_return_types = method.return_type.try { |return_type| TypeUtils.expand_type_names(return_type).map(&.lchop("::")) }
 
+      derive_return_type_contracts(contracts, owner_name, method, normalized_return_types)
+      derive_block_contracts(contracts, owner_name, method)
+      derive_bare_block_contracts(contracts, owner_name, method)
+      derive_residual_shapes(contracts, method)
+      derive_intrinsic_contracts(contracts, owner_name, method, normalized_return_types)
+      derive_element_return_contracts(contracts, owner_name, method, normalized_return_types)
+      derive_hash_value_return_contracts(contracts, owner_name, method, normalized_return_types)
+      derive_reduce_accumulator(contracts, owner_name, method)
+
+      contracts
+    end
+
+    private def derive_return_type_contracts(contracts, owner_name, method, normalized_return_types)
       if normalized_return_types
         if normalized_return_types == [owner_name] || normalized_return_types == ["self"]
           contracts << MethodContract.new(kind: MethodContractKind::PreserveReceiver, types: [owner_name], class_method: method.class_method)
@@ -59,12 +72,13 @@ module Crystalline::Lightweight
           contracts << MethodContract.new(kind: MethodContractKind::ReturnValue, types: normalized_return_types, class_method: method.class_method)
         end
       end
+    end
 
+    private def derive_block_contracts(contracts, owner_name, method)
       if block_restriction = method.block_restriction
         if split = split_proc_restriction(block_restriction)
           proc_inputs, proc_output = split
           element_types = TypeUtils.enumerable_element_types(owner_name) || [] of String
-          element_var = element_types.first? || generic_element_var(owner_name)
 
           if yield_contract = yield_contract_for(proc_inputs, owner_name, element_types, method)
             contracts << yield_contract
@@ -75,24 +89,18 @@ module Crystalline::Lightweight
           end
         end
       end
+    end
 
-      # A bare-& method that yields the receiver (`OptionParser.parse do
-      # |parser|`, `File.open(path) do |file|`): the declaration cannot
-      # express the yield target, so the known receiver-yielders are
-      # name-keyed. `String.build` declares the same shape but yields its
-      # builder, not the receiver — deliberately absent.
+    private def derive_bare_block_contracts(contracts, owner_name, method)
       if method.block_restriction.nil? && method.return_type == "self"
         case "#{owner_name}.#{method.name}"
         when "OptionParser.parse", "File.open", "IO.open"
           contracts << MethodContract.new(kind: MethodContractKind::YieldSelf, types: [owner_name], class_method: method.class_method)
         end
       end
+    end
 
-      # Residual computed shapes: the stdlib declares these with an
-      # untyped block and no return type — `flat_map(& : T -> _)`,
-      # `compact_map(& : T -> _)`, `group_by(& : T -> U)` — the result
-      # only exists in the method body, which the structural derivation
-      # deliberately does not evaluate.
+    private def derive_residual_shapes(contracts, method)
       case method.name
       when "flat_map"
         contracts << MethodContract.new(kind: MethodContractKind::ReturnValue, result_shape: MethodContractResultShape::ArrayOfFlattenedBlockResult, class_method: method.class_method)
@@ -103,21 +111,18 @@ module Crystalline::Lightweight
       when "find_value"
         contracts << MethodContract.new(kind: MethodContractKind::ReturnValueOrNil, result_shape: MethodContractResultShape::BlockResultOrNil, class_method: method.class_method)
       end
+    end
 
-      # Language intrinsics with no block restriction in the declaration:
-      # `tap(&)` yields the receiver and returns `self`; `try(&)` yields
-      # the non-nil receiver and returns the block result or nil. The
-      # block-arg seeding for both happens at the call site (receiver
-      # types), only the return contracts live here.
+    private def derive_intrinsic_contracts(contracts, owner_name, method, normalized_return_types)
       if method.name == "tap" && normalized_return_types == [owner_name]
         contracts << MethodContract.new(kind: MethodContractKind::YieldSelf, types: [owner_name], class_method: method.class_method)
       end
       if method.name == "try" && !method.class_method
         contracts << MethodContract.new(kind: MethodContractKind::ReturnValueOrNil, result_shape: MethodContractResultShape::BlockResultOrNil, class_method: method.class_method)
       end
+    end
 
-      # Element-return contracts: the declared return matches the owner's
-      # element/key/value types (`first : T` on `Array(T)`).
+    private def derive_element_return_contracts(contracts, owner_name, method, normalized_return_types)
       if element_types = TypeUtils.enumerable_element_types(owner_name)
         if normalized_return_types
           if normalized_return_types.sort == element_types.sort
@@ -127,8 +132,10 @@ module Crystalline::Lightweight
           end
         end
       end
+    end
 
-      if key_types = TypeUtils.hash_key_types(owner_name)
+    private def derive_hash_value_return_contracts(contracts, owner_name, method, normalized_return_types)
+      if TypeUtils.hash_key_types(owner_name)
         if value_types = TypeUtils.hash_value_types(owner_name)
           if normalized_return_types
             if normalized_return_types.sort == value_types.sort
@@ -139,17 +146,14 @@ module Crystalline::Lightweight
           end
         end
       end
+    end
 
-      # `reduce`'s accumulator type depends on the memo argument at the
-      # call site: the declaration (`& : (U, T) -> U`) cannot express it,
-      # so it stays name-keyed.
+    private def derive_reduce_accumulator(contracts, owner_name, method)
       if method.name == "reduce"
         if element_types = TypeUtils.enumerable_element_types(owner_name)
           contracts << MethodContract.new(kind: MethodContractKind::YieldAccumulatorAndElement, block_args: [element_types, element_types], class_method: method.class_method)
         end
       end
-
-      contracts
     end
 
     # `(T -> U)` / `(T, Int32 ->)` / `(T -> U | ::Nil)` → {inputs, output}.
@@ -178,46 +182,67 @@ module Crystalline::Lightweight
     private def yield_contract_for(proc_inputs : Array(String), owner_name : String, element_types : Array(String), method : MethodInfo) : MethodContract?
       return nil if proc_inputs == ["self"]
 
-      inputs = if proc_inputs.size == 1
-                 if tuple_parts = TypeUtils.tuple_element_types(proc_inputs.first)
-                   # The block destructures a single tuple element into multiple
-                   # params (`map { |k, v| ... }` on `Array(Tuple(K, V))`):
-                   # compare against the element tuple's parts, not the whole
-                   # tuple.
-                   if element_types.size == 1
-                     if element_parts = TypeUtils.tuple_element_types(element_types.first)
-                       element_types = element_parts.map(&.join(" | "))
-                     end
-                   end
-                   tuple_parts.map(&.join(" | "))
-                 else
-                   proc_inputs
-                 end
-               else
-                 proc_inputs
-               end
+      inputs, element_types = normalized_yield_inputs(proc_inputs, element_types)
 
       if !element_types.empty?
-        # A single input may be a union string (`& : (A | B ->)` on a
-        # compiled instantiation): compare the expanded parts too.
-        expanded_inputs = inputs.flat_map { |input| TypeUtils.expand_type_names(input) }
-        if expanded_inputs == element_types || inputs == element_types
-          return MethodContract.new(kind: MethodContractKind::YieldElement, types: element_types, class_method: method.class_method)
-        end
-        if inputs.size == 2 && inputs[1] == "Int32" && TypeUtils.expand_type_names(inputs[0]) == element_types
-          return MethodContract.new(kind: MethodContractKind::YieldElementWithIndex, types: element_types + ["Int32"], class_method: method.class_method)
-        end
+        contract = yield_contract_for_element_types(inputs, element_types, method)
+        return contract if contract
       elsif element_var = generic_element_var(owner_name)
-        # A generic module owner (`Enumerable(T)`): its single type var is
-        # the element var. The call site substitutes the receiver's types.
-        if inputs == [element_var]
-          return MethodContract.new(kind: MethodContractKind::YieldElement, types: [element_var], class_method: method.class_method)
-        end
-        if inputs == [element_var, "Int32"]
-          return MethodContract.new(kind: MethodContractKind::YieldElementWithIndex, types: [element_var, "Int32"], class_method: method.class_method)
-        end
+        contract = yield_contract_for_generic_element(inputs, element_var, method)
+        return contract if contract
       end
 
+      if TypeUtils.hash_key_types(owner_name)
+        contract = yield_contract_for_hash(inputs, owner_name, method)
+        return contract if contract
+      end
+
+      if inputs.all? { |input| input.size > 1 || input != input.upcase }
+        return MethodContract.new(kind: MethodContractKind::YieldSelf, types: inputs, class_method: method.class_method)
+      end
+
+      nil
+    end
+
+    private def normalized_yield_inputs(proc_inputs : Array(String), element_types : Array(String)) : {Array(String), Array(String)}
+      if proc_inputs.size == 1
+        if tuple_parts = TypeUtils.tuple_element_types(proc_inputs.first)
+          if element_types.size == 1
+            if element_parts = TypeUtils.tuple_element_types(element_types.first)
+              element_types = element_parts.map(&.join(" | "))
+            end
+          end
+          {tuple_parts.map(&.join(" | ")), element_types}
+        else
+          {proc_inputs, element_types}
+        end
+      else
+        {proc_inputs, element_types}
+      end
+    end
+
+    private def yield_contract_for_element_types(inputs : Array(String), element_types : Array(String), method : MethodInfo) : MethodContract?
+      expanded_inputs = inputs.flat_map { |input| TypeUtils.expand_type_names(input) }
+      if expanded_inputs == element_types || inputs == element_types
+        return MethodContract.new(kind: MethodContractKind::YieldElement, types: element_types, class_method: method.class_method)
+      end
+      if inputs.size == 2 && inputs[1] == "Int32" && TypeUtils.expand_type_names(inputs[0]) == element_types
+        return MethodContract.new(kind: MethodContractKind::YieldElementWithIndex, types: element_types + ["Int32"], class_method: method.class_method)
+      end
+      nil
+    end
+
+    private def yield_contract_for_generic_element(inputs : Array(String), element_var : String, method : MethodInfo) : MethodContract?
+      if inputs == [element_var]
+        return MethodContract.new(kind: MethodContractKind::YieldElement, types: [element_var], class_method: method.class_method)
+      end
+      if inputs == [element_var, "Int32"]
+        return MethodContract.new(kind: MethodContractKind::YieldElementWithIndex, types: [element_var, "Int32"], class_method: method.class_method)
+      end
+      nil
+    end
+
+    private def yield_contract_for_hash(inputs : Array(String), owner_name : String, method : MethodInfo) : MethodContract?
       if key_types = TypeUtils.hash_key_types(owner_name)
         if inputs == key_types
           return MethodContract.new(kind: MethodContractKind::YieldKey, types: key_types, class_method: method.class_method)
@@ -231,16 +256,6 @@ module Crystalline::Lightweight
           end
         end
       end
-
-      # A helper with a typed block restriction on a non-enumerable owner
-      # (`each_direct_def(node, & : Crystal::Def ->)`): the restriction's
-      # input types ARE the block-arg types. Only concrete names qualify
-      # — a bare single-letter var (`T`) means a generic element handled
-      # by the caller's substitution.
-      if inputs.all? { |input| input.size > 1 || input != input.upcase }
-        return MethodContract.new(kind: MethodContractKind::YieldSelf, types: inputs, class_method: method.class_method)
-      end
-
       nil
     end
 
@@ -252,20 +267,12 @@ module Crystalline::Lightweight
       output = proc_output.strip
       return nil if output.empty?
 
-      # `U?` parses (and to_s-es) as `U | ::Nil`.
       if output.ends_with?("| ::Nil") || output.ends_with?("| Nil")
-        base = output.rchop("| ::Nil").rchop("| Nil").rstrip
-        return MethodContractResultShape::BlockResultOrNil if return_type == output
-        return MethodContractResultShape::ArrayOfCompactBlockResult if return_type == "Array(#{base})"
-        return nil
+        return shape_for_nilable_output(output, return_type)
       end
 
       if output.starts_with?("Array(") && output.ends_with?(')')
-        # `flat_map(& : T -> Array(U)) : Array(U)` splices the block's
-        # array; a map with an array block yields Array(Array(U)).
-        return MethodContractResultShape::ArrayOfFlattenedBlockResult if return_type == output
-        return MethodContractResultShape::ArrayOfBlockResult if return_type == "Array(#{output})"
-        return nil
+        return shape_for_array_output(output, return_type)
       end
 
       if return_type == "Array(#{output})"
@@ -274,6 +281,24 @@ module Crystalline::Lightweight
       if return_type == "#{output} | Nil" || return_type == "#{output} | ::Nil"
         return MethodContractResultShape::BlockResultOrNil
       end
+
+      shape_for_hash_output(output, return_type, element_types, owner_name)
+    end
+
+    private def shape_for_nilable_output(output : String, return_type : String) : MethodContractResultShape?
+      base = output.rchop("| ::Nil").rchop("| Nil").rstrip
+      return MethodContractResultShape::BlockResultOrNil if return_type == output
+      return MethodContractResultShape::ArrayOfCompactBlockResult if return_type == "Array(#{base})"
+      nil
+    end
+
+    private def shape_for_array_output(output : String, return_type : String) : MethodContractResultShape?
+      return MethodContractResultShape::ArrayOfFlattenedBlockResult if return_type == output
+      return MethodContractResultShape::ArrayOfBlockResult if return_type == "Array(#{output})"
+      nil
+    end
+
+    private def shape_for_hash_output(output : String, return_type : String, element_types : Array(String), owner_name : String) : MethodContractResultShape?
       if element_var = element_types.first? || generic_element_var(owner_name)
         if return_type == "Hash(#{output}, #{element_var})"
           return MethodContractResultShape::HashOfBlockResultToReceiverElement
@@ -282,7 +307,6 @@ module Crystalline::Lightweight
           return MethodContractResultShape::HashOfBlockResultToReceiverElementArray
         end
       end
-
       nil
     end
 

@@ -16,6 +16,24 @@ module Crystal
   end
 
   class SemanticVisitor < Visitor
+    private def parse_required_files(filenames : Array(String), nodes : Array(ASTNode))
+      filenames.each do |filename|
+        if @program.requires.add?(filename)
+          # Use file_overrides is needed to load files from memory.
+          file_contents = @program.file_overrides.try(&.[filename]?) || File.read(filename)
+          parser = Parser.new file_contents, @program.string_pool
+          parser.filename = filename
+          parser.wants_doc = @program.wants_doc?
+          parsed_nodes = parser.parse
+          parsed_nodes = @program.normalize(parsed_nodes, inside_exp: inside_exp?)
+          # We must type the node immediately, in case a file requires another
+          # *before* one of the files in `filenames`
+          parsed_nodes.accept self
+          nodes << FileNode.new(parsed_nodes, filename)
+        end
+      end
+    end
+
     # Make it possible to visit in-memory.
     def visit(node : Require)
       if expanded = node.expanded
@@ -37,21 +55,7 @@ module Crystal
       filenames = @program.find_in_path(filename, relative_to)
       if filenames
         nodes = Array(ASTNode).new(filenames.size)
-        filenames.each do |filename|
-          if @program.requires.add?(filename)
-            # Use file_overrides is needed to load files from memory.
-            file_contents = @program.file_overrides.try(&.[filename]?) || File.read(filename)
-            parser = Parser.new file_contents, @program.string_pool
-            parser.filename = filename
-            parser.wants_doc = @program.wants_doc?
-            parsed_nodes = parser.parse
-            parsed_nodes = @program.normalize(parsed_nodes, inside_exp: inside_exp?)
-            # We must type the node immediately, in case a file requires another
-            # *before* one of the files in `filenames`
-            parsed_nodes.accept self
-            nodes << FileNode.new(parsed_nodes, filename)
-          end
-        end
+        parse_required_files(filenames, nodes)
         expanded = Expressions.from(nodes)
       else
         expanded = Nop.new

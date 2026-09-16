@@ -72,34 +72,15 @@ class Crystalline::Controller
         }
       }
     when LSP::HoverRequest
-      return nil unless @pending_requests.includes? message.id
-      file_uri = URI.parse message.params.text_document.uri
-      workspace.hover(@server, file_uri, message.params.position)
+      handle_hover_request(message)
     when LSP::DefinitionRequest
-      return nil unless @pending_requests.includes? message.id
-      file_uri = URI.parse message.params.text_document.uri
-      workspace.definitions(@server, file_uri, message.params.position)
+      handle_definition_request(message)
     when LSP::CompletionRequest
-      return nil unless @pending_requests.includes? message.id
-      file_uri = URI.parse message.params.text_document.uri
-      workspace.completion(@server, file_uri, message.params.position, message.params.context.try &.trigger_character)
+      handle_completion_request(message)
     when LSP::DocumentSymbolsRequest
-      @documents_lock.synchronize do
-        file_uri = URI.parse message.params.text_document.uri
-        document_symbols = workspace.document_symbols(@server, file_uri)
-
-        if @server.client_capabilities.text_document.try &.document_symbol.try &.hierarchical_document_symbol_support
-          document_symbols
-        else
-          document_symbols.try &.reduce([] of LSP::SymbolInformation) { |acc, document_symbol|
-            acc.concat(document_symbol.to_symbol_information_array(message.params.text_document.uri))
-          }
-        end
-      end
+      handle_document_symbols_request(message)
     when LSP::WorkspaceSymbolRequest
-      @documents_lock.synchronize do
-        workspace.workspace_symbol(@server, message.params.query)
-      end
+      handle_workspace_symbol_request(message)
     else
       nil
     end

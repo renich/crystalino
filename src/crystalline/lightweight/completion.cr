@@ -90,71 +90,11 @@ module Crystalline::Lightweight
       seen = Set(String).new
 
       if @context.trigger_character == "@"
-        # The replace range now includes the sigil, so the fragment does
-        # too: strip it before matching against the bare ivar names.
-        fragment = fragment.lchop('@').lchop('@')
-        inference = Inference.for(@source, @line_number + 1, @context.analysis_column + 1, @query)
-        if inference
-          inference.instance_var_types.each_key do |name|
-            next unless name.lchop('@').starts_with?(fragment)
-            next if seen.includes?(name)
-            seen << name
-            items << variable_completion_item(name, kind: LSP::CompletionItemKind::Field, detail: "#{name} : #{inference.types_for_instance_var(name).uniq.join(" | ")}", insert_text: name)
-          end
-
-          inference.class_var_types.each_key do |name|
-            next unless name.lchop("@@").starts_with?(fragment)
-            next if seen.includes?(name)
-            seen << name
-            items << variable_completion_item(name, kind: LSP::CompletionItemKind::Field, detail: "#{name} : #{inference.types_for_class_var(name).uniq.join(" | ")}", insert_text: name)
-          end
-
-          return items
-        end
-
-        # A lone `@` does not parse (the buffer may be mid-edit): fall back
-        # to scanning ivar/class-var names in the source.
-        return ivar_names_from_source(fragment)
+        return complete_sigil_context(fragment, items, seen)
       end
 
       if @context.trigger_character == ":" || fragment[0]?.try(&.ascii_uppercase?)
-        if @context.trigger_character == ":"
-          # The fixer may have appended a placeholder name after the `::`;
-          # the user has not typed it, so match as if the fragment were empty.
-          fragment = "" if fragment == "Placeholder"
-          receiver = Resolver.receiver_from_prefix(@context.analysis_prefix).rchop("::")
-          resolved = @query.find_type(receiver) || @query.resolve_type_name(receiver, namespace: nil)
-          if resolved
-            resolved_name = resolved.is_a?(String) ? resolved : resolved.name
-            @query.subtypes_for(resolved_name).each do |type_name|
-              short_name = type_name.split("::").last
-              next unless short_name.starts_with?(fragment)
-              next if seen.includes?(type_name)
-              seen << type_name
-              if type = @query.find_type(type_name)
-                items << scoped_type_completion_item(type)
-              else
-                # Enum members and other constants are subtypes without
-                # their own TypeInfo: offer a plain constant item.
-                items << LSP::CompletionItem.new(
-                  label: short_name,
-                  kind: LSP::CompletionItemKind::EnumMember,
-                  detail: resolved_name,
-                  insert_text: short_name,
-                )
-              end
-            end
-            return items
-          end
-        end
-
-        @query.all_types.each do |type|
-          next unless type.name.split("::").last.starts_with?(fragment) || type.name.starts_with?(fragment)
-          next if seen.includes?(type.name)
-          seen << type.name
-          items << type_completion_item(type)
-        end
-        return items
+        return complete_types_context(fragment, items, seen)
       end
 
       inference = Inference.for(@source, @line_number + 1, @context.analysis_column + 1, @query)
@@ -165,37 +105,108 @@ module Crystalline::Lightweight
       end
 
       if inference
-        inference.local_types.each do |name, type_names|
-          next unless name.starts_with?(fragment)
+        complete_inference_context(inference, fragment, items, seen)
+      end
+
+      complete_top_level_methods(fragment, items, seen)
+
+      items
+    end
+
+    private def complete_sigil_context(fragment, items, seen)
+      fragment = fragment.lchop('@').lchop('@')
+      inference = Inference.for(@source, @line_number + 1, @context.analysis_column + 1, @query)
+      if inference
+        inference.instance_var_types.each_key do |name|
+          next unless name.lchop('@').starts_with?(fragment)
           next if seen.includes?(name)
           seen << name
-          items << variable_completion_item(name, detail: "#{name} : #{type_names.uniq.join(" | ")}")
+          items << variable_completion_item(name, kind: LSP::CompletionItemKind::Field, detail: "#{name} : #{inference.types_for_instance_var(name).uniq.join(" | ")}", insert_text: name)
         end
 
-        # A bare identifier in a def body is a self-call: offer the current
-        # type's own methods (class methods when in class context) so
-        # `process` completes to `process_result`/`process_type`.
-        if current_type = inference.current_type_name
-          ranks = method_ranks([current_type])
-          @query.methods_for(current_type, class_method: inference.class_method_context?).each do |method|
-            next unless method.name.starts_with?(fragment)
-            args_signature = method.args.map { |arg| "#{arg.name}:#{arg.restriction}" }.join(",")
-            key = "#{method.owner}:#{method.class_method}:#{method.name}(#{args_signature})"
-            next if seen.includes?(key)
-            seen << key
-            items << method_completion_item(method, hierarchy_rank: ranks[method.owner]?)
-          end
+        inference.class_var_types.each_key do |name|
+          next unless name.lchop("@@").starts_with?(fragment)
+          next if seen.includes?(name)
+          seen << name
+          items << variable_completion_item(name, kind: LSP::CompletionItemKind::Field, detail: "#{name} : #{inference.types_for_class_var(name).uniq.join(" | ")}", insert_text: name)
+        end
+
+        return items
+      end
+
+      ivar_names_from_source(fragment)
+    end
+
+    private def complete_types_context(fragment, items, seen)
+      if @context.trigger_character == ":"
+        if resolved_items = complete_colon_context(fragment, items, seen)
+          return resolved_items
         end
       end
 
+      @query.all_types.each do |type|
+        next unless type.name.split("::").last.starts_with?(fragment) || type.name.starts_with?(fragment)
+        next if seen.includes?(type.name)
+        seen << type.name
+        items << type_completion_item(type)
+      end
+      items
+    end
+
+    private def complete_colon_context(fragment, items, seen)
+      fragment = "" if fragment == "Placeholder"
+      receiver = Resolver.receiver_from_prefix(@context.analysis_prefix).rchop("::")
+      resolved = @query.find_type(receiver) || @query.resolve_type_name(receiver, namespace: nil)
+      if resolved
+        resolved_name = resolved.is_a?(String) ? resolved : resolved.name
+        @query.subtypes_for(resolved_name).each do |type_name|
+          short_name = type_name.split("::").last
+          next unless short_name.starts_with?(fragment)
+          next if seen.includes?(type_name)
+          seen << type_name
+          if type = @query.find_type(type_name)
+            items << scoped_type_completion_item(type)
+          else
+            items << LSP::CompletionItem.new(
+              label: short_name,
+              kind: LSP::CompletionItemKind::EnumMember,
+              detail: resolved_name,
+              insert_text: short_name,
+            )
+          end
+        end
+        return items
+      end
+    end
+
+    private def complete_inference_context(inference, fragment, items, seen)
+      inference.local_types.each do |name, type_names|
+        next unless name.starts_with?(fragment)
+        next if seen.includes?(name)
+        seen << name
+        items << variable_completion_item(name, detail: "#{name} : #{type_names.uniq.join(" | ")}")
+      end
+
+      if current_type = inference.current_type_name
+        ranks = method_ranks([current_type])
+        @query.methods_for(current_type, class_method: inference.class_method_context?).each do |method|
+          next unless method.name.starts_with?(fragment)
+          args_signature = method.args.map { |arg| "#{arg.name}:#{arg.restriction}" }.join(",")
+          key = "#{method.owner}:#{method.class_method}:#{method.name}(#{args_signature})"
+          next if seen.includes?(key)
+          seen << key
+          items << method_completion_item(method, hierarchy_rank: ranks[method.owner]?)
+        end
+      end
+    end
+
+    private def complete_top_level_methods(fragment, items, seen)
       @query.top_level_methods.each do |method|
         next unless method.name.starts_with?(fragment)
         next if seen.includes?(method.name)
         seen << method.name
         items << method_completion_item(method)
       end
-
-      items
     end
 
     private def resolve_receiver(receiver : String) : {Array(String), Bool}

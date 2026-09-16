@@ -201,22 +201,7 @@ class Crystalline::Workspace
 
     # LSP::Log.info { "Compiling #{file_uri}, project: #{project.try(&.root_uri.decoded_path)}" }
 
-    if project && (entry_point = project.entry_point?)
-      target = entry_point
-      progress = Progress.new(
-        token: "workspace/compile",
-        title: "Building project",
-        message: target.decoded_path
-      )
-    else
-      # The file is not a project dependency.
-      target = file_uri
-      progress = Progress.new(
-        token: "workspace/compile",
-        title: "Building",
-        message: target.decoded_path
-      )
-    end
+    target, progress = prepare_compile_target(project, file_uri)
 
     target_string = target.to_s
     LSP::Log.info do
@@ -227,21 +212,14 @@ class Crystalline::Workspace
                     end
       "[compile] request: target=#{target.decoded_path} source=#{source_kind} ignore_cached=#{ignore_cached_result} discard_nil_cached=#{discard_nil_cached_result}"
     end
-    # Check if we can serve the result from the cache.
-    if !ignore_cached_result && @result_cache.exists?(target_string) && !@result_cache.invalidated?(target_string)
-      cached_result = @result_cache.get(target_string)
-      LSP::Log.info { "[compile] cache hit: #{target.decoded_path}" }
-      return cached_result unless cached_result.nil? && discard_nil_cached_result
-    end
+    hit, cached_result = check_compile_cache(target_string, target, ignore_cached_result, discard_nil_cached_result)
+    return cached_result if hit
 
     # Wait for pending compilations to finish…
     @@compilation_lock.synchronize do
       # Check again the cache in case some previous compilation that ran while waiting for the mutex to unlock is still valid.
-      if !ignore_cached_result && @result_cache.exists?(target_string) && !@result_cache.invalidated?(target_string)
-        cached_result = @result_cache.get(target_string)
-        LSP::Log.info { "[compile] cache hit after wait: #{target.decoded_path}" }
-        return cached_result unless cached_result.nil? && discard_nil_cached_result
-      end
+      hit_after, cached_result_after = check_compile_cache(target_string, target, ignore_cached_result, discard_nil_cached_result)
+      return cached_result_after if hit_after
 
       sync_channel = Channel(Crystal::Compiler::Result?).new(1)
 
@@ -257,40 +235,7 @@ class Crystalline::Workspace
         # then we discard the result because it is already outdated.
         @result_cache.set(target_string, result, unless_invalidated_since: compilation_start)
 
-        if result && !top_level && !@result_cache.invalidated?(target_string)
-          # Build the summary and index off the event loop: they walk the
-          # whole typed program.
-          summary, index = Analysis.run_dedicated do
-            {
-              Crystalline::Lightweight::Summary.from_result(result),
-              Crystalline::Lightweight::Index.from_program(result.program),
-            }
-          end
-
-          # A client event may have invalidated the compile while the
-          # index/summary were being built: only publish when still relevant.
-          unless @result_cache.invalidated?(target_string)
-            @semantic_cache[target_string] = result
-            stamp_compiled_sources(result)
-            project.try &.semantic_summary = summary
-            project.try(&.lightweight_index=(index))
-            # The project index changed: cached lightweight queries are stale.
-            @query_cache_lock.synchronize { @query_cache.clear }
-            warm_query_cache
-          end
-        end
-
-        if result
-          if p = project
-            if p.entry_point?
-              # Store the project dependencies.
-              p.dependencies = result.program.requires
-            end
-          end
-          "Completed successfully."
-        else
-          "Completed with errors."
-        end
+        process_compile_result(result, project, target_string, top_level)
       ensure
         sync_channel.send(result)
       end
@@ -306,6 +251,68 @@ class Crystalline::Workspace
     end
   end
 
+  private def prepare_compile_target(project, file_uri)
+    if project && (entry_point = project.entry_point?)
+      target = entry_point
+      progress = Progress.new(
+        token: "workspace/compile",
+        title: "Building project",
+        message: target.decoded_path
+      )
+    else
+      target = file_uri
+      progress = Progress.new(
+        token: "workspace/compile",
+        title: "Building",
+        message: target.decoded_path
+      )
+    end
+    {target, progress}
+  end
+
+  private def check_compile_cache(target_string, target, ignore_cached_result, discard_nil_cached_result)
+    return {false, nil} if ignore_cached_result || !@result_cache.exists?(target_string) || @result_cache.invalidated?(target_string)
+
+    cached_result = @result_cache.get(target_string)
+    LSP::Log.info { "[compile] cache hit: #{target.decoded_path}" }
+    if cached_result.nil? && discard_nil_cached_result
+      {false, nil}
+    else
+      {true, cached_result}
+    end
+  end
+
+  private def process_compile_result(result, project, target_string, top_level)
+    if result && !top_level && !@result_cache.invalidated?(target_string)
+      summary, index = Analysis.run_dedicated do
+        {
+          Crystalline::Lightweight::Summary.from_result(result),
+          Crystalline::Lightweight::Index.from_program(result.program),
+        }
+      end
+
+      unless @result_cache.invalidated?(target_string)
+        @semantic_cache[target_string] = result
+        stamp_compiled_sources(result)
+        project.try &.semantic_summary = summary
+        project.try(&.lightweight_index=(index))
+        @query_cache_lock.synchronize { @query_cache.clear }
+        warm_query_cache
+      end
+    end
+
+    if result
+      if p = project
+        if p.entry_point?
+          p.dependencies = result.program.requires
+        end
+      end
+      "Completed successfully."
+    else
+      "Completed with errors."
+    end
+  end
+
   private def project_for_file(file_uri : URI) : Project?
     Project.best_fit_for_file(@projects, file_uri)
   end
@@ -318,47 +325,8 @@ class Crystalline::Workspace
       end
     end
 
-    query = if project = document.project? || Project.best_fit_for_file(@projects, document.uri, require_dependency: false)
-              if project_index = project.lightweight_index
-                if document.dirty? || !project.dependencies.includes?(document.uri.decoded_path)
-                  # The buffer diverges from what was compiled, or the file is
-                  # not part of the compiled program at all (e.g. a new file
-                  # not yet required): overlay the source index on top of the
-                  # project index. The overlay is a small per-file index; the
-                  # project index is shared across documents instead of being
-                  # copied per keystroke.
-                  source_index = Crystalline::Lightweight::Index.from_source(fix_source(document.contents), document.uri.decoded_path)
-                  Crystalline::Lightweight::Query.new(project_index, project.semantic_summary, secondary: Crystalline::Lightweight::PreludeIndex.get, overlay: source_index)
-                else
-                  # A clean dependency buffer matches the compiled sources:
-                  # the project index is authoritative, no overlay needed.
-                  Crystalline::Lightweight::Query.new(project_index, project.semantic_summary, secondary: Crystalline::Lightweight::PreludeIndex.get)
-                end
-              end
-            end
-
-    query ||= begin
-      source_index = Crystalline::Lightweight::Index.from_source(fix_source(document.contents), document.uri.decoded_path)
-      if source_index
-        # Before the project index exists (no compile yet), the base index
-        # is the project's own source files parsed from disk, so receivers
-        # of project types (e.g. `workspace`) resolve from the very first
-        # keystroke. The stdlib prelude is layered underneath.
-        project_index = document.project?.try(&.source_index)
-        project_index ||= Project.best_fit_for_file(@projects, document.uri, require_dependency: false).try(&.source_index)
-        if project_index
-          if prelude = Crystalline::Lightweight::PreludeIndex.get
-            Crystalline::Lightweight::Query.new(project_index, secondary: prelude, overlay: source_index)
-          else
-            Crystalline::Lightweight::Query.new(project_index, overlay: source_index)
-          end
-        elsif prelude = Crystalline::Lightweight::PreludeIndex.get
-          Crystalline::Lightweight::Query.new(prelude, overlay: source_index)
-        else
-          Crystalline::Lightweight::Query.new(source_index)
-        end
-      end
-    end
+    query = build_lightweight_query_from_project(document)
+    query ||= build_lightweight_query_from_source(document)
 
     @query_cache_lock.synchronize do
       if query
@@ -368,6 +336,40 @@ class Crystalline::Workspace
       end
     end
     query
+  end
+
+  private def build_lightweight_query_from_project(document : TextDocument) : Crystalline::Lightweight::Query?
+    project = document.project? || Project.best_fit_for_file(@projects, document.uri, require_dependency: false)
+    return unless project
+    project_index = project.lightweight_index
+    return unless project_index
+
+    if document.dirty? || !project.dependencies.includes?(document.uri.decoded_path)
+      source_index = Crystalline::Lightweight::Index.from_source(fix_source(document.contents), document.uri.decoded_path)
+      Crystalline::Lightweight::Query.new(project_index, project.semantic_summary, secondary: Crystalline::Lightweight::PreludeIndex.get, overlay: source_index)
+    else
+      Crystalline::Lightweight::Query.new(project_index, project.semantic_summary, secondary: Crystalline::Lightweight::PreludeIndex.get)
+    end
+  end
+
+  private def build_lightweight_query_from_source(document : TextDocument) : Crystalline::Lightweight::Query?
+    source_index = Crystalline::Lightweight::Index.from_source(fix_source(document.contents), document.uri.decoded_path)
+    return unless source_index
+
+    project_index = document.project?.try(&.source_index) || Project.best_fit_for_file(@projects, document.uri, require_dependency: false).try(&.source_index)
+    prelude = Crystalline::Lightweight::PreludeIndex.get
+
+    if project_index
+      if prelude
+        Crystalline::Lightweight::Query.new(project_index, secondary: prelude, overlay: source_index)
+      else
+        Crystalline::Lightweight::Query.new(project_index, overlay: source_index)
+      end
+    elsif prelude
+      Crystalline::Lightweight::Query.new(prelude, overlay: source_index)
+    else
+      Crystalline::Lightweight::Query.new(source_index)
+    end
   end
 
   # Rebuild the cached lightweight query of every opened document in the
@@ -494,60 +496,11 @@ class Crystalline::Workspace
       line_number: position.line + 1,
       column_number: position.character + 1
     )
-    result.try { |r|
-      Analysis.nodes_at_cursor(r, location)
+    result.try { |res|
+      Analysis.nodes_at_cursor(res, location)
     }.try do |nodes, _context|
-      n = nodes.last?
-      contents = [] of String
-
-      # LSP::Log.info { "Node at cursor: #{n}" }
-      # LSP::Log.info { "Node class: #{n.class}" }
-      # LSP::Log.info { "Node expansion: #{n.expanded if n.responds_to? :expanded}" }
-      # LSP::Log.info { "Node type: #{n.try &.type?}" }
-      # LSP::Log.info { "Node type class: #{n.try &.type?.try &.class}" }
-      # LSP::Log.info { "Nodes classes: #{nodes.map &.class}" }
-      # LSP::Log.info { "Context: #{_context}" }
-
-      if n.is_a? Crystal::Def || n.is_a? Crystal::Macro
-        contents << code_markdown(Utils.format_def(n), language: "crystal")
-        append_markdown_doc contents, n.doc
-      elsif (n.is_a? Crystal::MacroExpression || n.is_a? Crystal::MacroIf) && n.expanded
-        contents << code_markdown(n.expanded.to_s, language: "crystal")
-      elsif n.responds_to? :resolved_type
-        str = ""
-        if n.responds_to? :name
-          str += "#{n.name}: #{n.resolved_type}"
-        else
-          str += n.resolved_type.to_s
-          str = n.to_s if str.empty?
-        end
-        contents << code_markdown(str, language: "crystal")
-        append_markdown_doc contents, n.resolved_type.doc
-      elsif n.is_a? Crystal::Call
-        if definition = n.target_defs.try &.first?
-          contents << code_markdown(Utils.format_def(definition), language: "crystal")
-        elsif n.expanded && n.expanded_macro
-          contents << code_markdown(n.expanded.to_s, language: "crystal")
-        end
-        append_markdown_doc contents, (definition || n.expanded_macro).try &.doc
-      elsif n.is_a? Crystal::Path
-        node_type = n.type? || Utils.resolve_path(n, nodes)
-        if node_type
-          contents << code_markdown(node_type.to_s, language: "crystal")
-          append_markdown_doc contents, node_type.doc
-        end
-      elsif n
-        str = ""
-        if n.responds_to? :name
-          str += "#{n.name}: #{n.type? || "?"}"
-        else
-          str += n.type?.to_s
-          str = n.to_s if str.empty?
-        end
-        contents << code_markdown(str, language: "crystal")
-        append_markdown_doc contents, n.doc
-      end
-
+      node = nodes.last?
+      contents = build_hover_contents(node, nodes)
       LSP::Hover.new(
         contents: LSP::MarkupContent.new(
           kind: LSP::MarkupKind::MarkDown,
@@ -557,6 +510,72 @@ class Crystalline::Workspace
     end
   rescue
     nil
+  end
+
+  private def build_hover_contents(node, nodes) : Array(String)
+    contents = [] of String
+
+    if node.is_a? Crystal::Def || node.is_a? Crystal::Macro
+      build_def_macro_hover(node, contents)
+    elsif (node.is_a? Crystal::MacroExpression || node.is_a? Crystal::MacroIf) && node.expanded
+      contents << code_markdown(node.expanded.to_s, language: "crystal")
+    elsif node.responds_to? :resolved_type
+      build_resolved_type_hover(node, contents)
+    elsif node.is_a? Crystal::Call
+      build_call_hover(node, contents)
+    elsif node.is_a? Crystal::Path
+      build_path_hover(node, nodes, contents)
+    elsif node
+      build_generic_node_hover(node, contents)
+    end
+
+    contents
+  end
+
+  private def build_def_macro_hover(node, contents)
+    contents << code_markdown(Utils.format_def(node), language: "crystal")
+    append_markdown_doc contents, node.doc
+  end
+
+  private def build_resolved_type_hover(node, contents)
+    str = ""
+    if node.responds_to? :name
+      str += "#{node.name}: #{node.resolved_type}"
+    else
+      str += node.resolved_type.to_s
+      str = node.to_s if str.empty?
+    end
+    contents << code_markdown(str, language: "crystal")
+    append_markdown_doc contents, node.resolved_type.doc
+  end
+
+  private def build_call_hover(node, contents)
+    if definition = node.target_defs.try &.first?
+      contents << code_markdown(Utils.format_def(definition), language: "crystal")
+    elsif node.expanded && node.expanded_macro
+      contents << code_markdown(node.expanded.to_s, language: "crystal")
+    end
+    append_markdown_doc contents, (definition || node.expanded_macro).try &.doc
+  end
+
+  private def build_path_hover(node, nodes, contents)
+    node_type = node.type? || Utils.resolve_path(node, nodes)
+    if node_type
+      contents << code_markdown(node_type.to_s, language: "crystal")
+      append_markdown_doc contents, node_type.doc
+    end
+  end
+
+  private def build_generic_node_hover(node, contents)
+    str = ""
+    if node.responds_to? :name
+      str += "#{node.name}: #{node.type? || "?"}"
+    else
+      str += node.type?.to_s
+      str = node.to_s if str.empty?
+    end
+    contents << code_markdown(str, language: "crystal")
+    append_markdown_doc contents, node.doc
   end
 
   def definitions(server : LSP::Server, file_uri : URI, position : LSP::Position)
@@ -590,8 +609,8 @@ class Crystalline::Workspace
       line_number: position.line + 1,
       column_number: position.character + 1
     )
-    result.try { |r|
-      Analysis.definitions_at_cursor(r, location)
+    result.try { |res|
+      Analysis.definitions_at_cursor(res, location)
     }.try do |definitions|
       node = definitions.node
       definitions.locations.try &.compact_map { |start_loc, end_loc|
@@ -681,7 +700,7 @@ class Crystalline::Workspace
     LSP::Log.info { "[completion] semantic cache hit: #{file_uri.decoded_path}:#{position.line}:#{position.character}" }
 
     nodes, _ = Analysis.nodes_at_cursor(result, location)
-    nodes.last?.try do |n|
+    nodes.last?.try do |node|
       completion_items = [] of LSP::CompletionItem
 
       # LSP::Log.info { "Node at cursor: #{n}" }
@@ -692,124 +711,7 @@ class Crystalline::Workspace
 
       range = completion_context.completion_range(position.line)
 
-      case trigger_character
-      when "."
-        node_type = n.type?
-        node_type = node_type.base_type if node_type.responds_to? :base_type
-
-        # We are looking for methods…
-        if node_type && node_type.responds_to?(:defs)
-          Analysis.all_defs(node_type).each { |def_name, definition, owner_type, nesting|
-            owner_prefix = "*Inherited from: #{owner_type.name}*\n\n" if owner_type.responds_to? :name && owner_type != n.type
-            owner_prefix ||= ""
-            documentation = (owner_prefix + (definition.doc || ""))
-
-            text_edit = LSP::TextEdit.new(
-              range: range,
-              new_text: def_name,
-            )
-
-            completion_items << LSP::CompletionItem.new(
-              label: Utils.format_def(definition, short: true),
-              insert_text: def_name,
-              kind: LSP::CompletionItemKind::Function,
-              filter_text: def_name,
-              detail: Utils.format_def(definition),
-              text_edit: text_edit,
-              sort_text: (nesting + 1).chr.to_s + def_name,
-              documentation: documentation.try { |doc|
-                LSP::MarkupContent.new(
-                  kind: LSP::MarkupKind::MarkDown,
-                  value: doc,
-                )
-              },
-            )
-          }
-
-          Analysis.all_macros(n.type).each { |macro_name, macro_def, owner_type, nesting|
-            owner_prefix = "*Inherited from: #{owner_type.name}*\n\n" if owner_type.responds_to? :name && owner_type != n.type
-            owner_prefix ||= ""
-            documentation = (owner_prefix + (macro_def.doc || ""))
-
-            text_edit = LSP::TextEdit.new(
-              range: range,
-              new_text: macro_name,
-            )
-
-            completion_items << LSP::CompletionItem.new(
-              label: Utils.format_def(macro_def, short: true),
-              insert_text: macro_name,
-              kind: LSP::CompletionItemKind::Method,
-              filter_text: macro_name,
-              detail: Utils.format_def(macro_def),
-              text_edit: text_edit,
-              sort_text: (nesting + 1).chr.to_s + macro_name,
-              documentation: documentation.try { |doc|
-                LSP::MarkupContent.new(
-                  kind: LSP::MarkupKind::MarkDown,
-                  value: doc,
-                )
-              },
-            )
-          }
-        end
-      when ":"
-        # We are looking for module types…
-        node_type = n.type?
-
-        if n.is_a? Crystal::Path
-          node_type ||= Utils.resolve_path(n, nodes)
-        end
-
-        if node_type.is_a? Crystal::MetaclassType
-          node_type = node_type.instance_type
-
-          Analysis.all_submodules(result, node_type).uniq(&.to_s).each { |type|
-            type_string = type.to_s
-
-            text_edit = LSP::TextEdit.new(
-              range: range,
-              new_text: type_string.lchop(node_type.to_s).lchop(trigger_character || ':'),
-            )
-
-            completion_items << LSP::CompletionItem.new(
-              label: type_string,
-              text_edit: text_edit,
-              kind: Crystalline::Utils.map_completion_kind(type, default: LSP::CompletionItemKind::Module),
-              documentation: type.doc.try { |doc|
-                LSP::MarkupContent.new(
-                  kind: LSP::MarkupKind::MarkDown,
-                  value: doc,
-                )
-              },
-            )
-          }
-        end
-      else
-        # Context autocompletion.
-        context = Analysis.context_at(result, location)
-        if trigger_character == "@"
-          context.try &.select!(&.starts_with?("@"))
-        end
-        context.try &.each { |name, type|
-          label = "#{name} : #{type}"
-          text_edit = LSP::TextEdit.new(
-            range: range,
-            new_text: name.lchop(trigger_character || ""),
-          )
-          completion_items << LSP::CompletionItem.new(
-            label: label,
-            text_edit: text_edit,
-            kind: LSP::CompletionItemKind::Variable,
-            documentation: type.doc.try { |doc|
-              LSP::MarkupContent.new(
-                kind: LSP::MarkupKind::MarkDown,
-                value: doc,
-              )
-            },
-          )
-        }
-      end
+      add_completion_items(node, nodes, range, trigger_character, result, location, completion_items)
 
       build_completion_list(completion_items)
     end
@@ -855,73 +757,148 @@ class Crystalline::Workspace
   def workspace_symbol(server : LSP::Server, query : String) : Array(LSP::SymbolInformation)
     symbols = [] of LSP::SymbolInformation
     query = query.downcase
-    
+
     @projects.each do |project|
       if index = project.lightweight_index
         index.types.each_value do |type|
-          type_name = type.name
-          if query.empty? || type_name.downcase.includes?(query)
-            if loc = type.name_location || type.location
-              symbols << LSP::SymbolInformation.new(
-                name: type_name,
-                kind: LSP::SymbolKind::Class,
-                deprecated: false,
-                location: LSP::Location.new(
-                  uri: "file://#{loc.filename}",
-                  range: LSP::Range.new(
-                    start: LSP::Position.new(line: loc.line_number - 1, character: loc.column_number - 1),
-                    end: LSP::Position.new(line: loc.line_number - 1, character: loc.column_number - 1)
-                  )
-                ),
-                container_name: nil
-              )
-            end
-          end
-
+          collect_workspace_type(type, query, symbols)
           type.methods.each do |method|
-            if query.empty? || method.name.downcase.includes?(query)
-              if loc = method.name_location || method.location
-                symbols << LSP::SymbolInformation.new(
-                  name: method.name,
-                  kind: method.macro ? LSP::SymbolKind::Function : LSP::SymbolKind::Method,
-                  deprecated: false,
-                  location: LSP::Location.new(
-                    uri: "file://#{loc.filename}",
-                    range: LSP::Range.new(
-                      start: LSP::Position.new(line: loc.line_number - 1, character: loc.column_number - 1),
-                      end: LSP::Position.new(line: loc.line_number - 1, character: loc.column_number - 1 + method.name_size)
-                    )
-                  ),
-                  container_name: type_name
-                )
-              end
-            end
+            collect_workspace_method(method, query, symbols, type.name)
           end
         end
-        
+
         index.top_level_methods.each do |method|
-          if query.empty? || method.name.downcase.includes?(query)
-            if loc = method.name_location || method.location
-              symbols << LSP::SymbolInformation.new(
-                name: method.name,
-                kind: method.macro ? LSP::SymbolKind::Function : LSP::SymbolKind::Method,
-                deprecated: false,
-                location: LSP::Location.new(
-                  uri: "file://#{loc.filename}",
-                  range: LSP::Range.new(
-                    start: LSP::Position.new(line: loc.line_number - 1, character: loc.column_number - 1),
-                    end: LSP::Position.new(line: loc.line_number - 1, character: loc.column_number - 1 + method.name_size)
-                  )
-                ),
-                container_name: nil
-              )
-            end
-          end
+          collect_workspace_method(method, query, symbols, nil)
         end
       end
     end
-    
+
     symbols.first(100)
+  end
+
+  private def add_completion_items(node, nodes, range, trigger_character, result, location, completion_items)
+    case trigger_character
+    when "."
+      add_method_completions(node, range, completion_items)
+    when ":"
+      add_module_completions(node, nodes, range, trigger_character, result, completion_items)
+    else
+      add_context_completions(range, trigger_character, result, location, completion_items)
+    end
+  end
+
+  private def add_method_completions(node, range, completion_items)
+    node_type = node.type?
+    node_type = node_type.base_type if node_type.responds_to? :base_type
+
+    if node_type && node_type.responds_to?(:defs)
+      Analysis.all_defs(node_type).each { |def_name, definition, owner_type, nesting|
+        owner_prefix = "*Inherited from: #{owner_type.name}*\n\n" if owner_type.responds_to? :name && owner_type != node.type
+        owner_prefix ||= ""
+        documentation = (owner_prefix + (definition.doc || ""))
+
+        completion_items << LSP::CompletionItem.new(
+          label: Utils.format_def(definition, short: true),
+          insert_text: def_name,
+          kind: LSP::CompletionItemKind::Function,
+          filter_text: def_name,
+          detail: Utils.format_def(definition),
+          text_edit: LSP::TextEdit.new(range: range, new_text: def_name),
+          sort_text: (nesting + 1).chr.to_s + def_name,
+          documentation: documentation.try { |doc| LSP::MarkupContent.new(kind: LSP::MarkupKind::MarkDown, value: doc) },
+        )
+      }
+
+      Analysis.all_macros(node.type).each { |macro_name, macro_def, owner_type, nesting|
+        owner_prefix = "*Inherited from: #{owner_type.name}*\n\n" if owner_type.responds_to? :name && owner_type != node.type
+        owner_prefix ||= ""
+        documentation = (owner_prefix + (macro_def.doc || ""))
+
+        completion_items << LSP::CompletionItem.new(
+          label: Utils.format_def(macro_def, short: true),
+          insert_text: macro_name,
+          kind: LSP::CompletionItemKind::Method,
+          filter_text: macro_name,
+          detail: Utils.format_def(macro_def),
+          text_edit: LSP::TextEdit.new(range: range, new_text: macro_name),
+          sort_text: (nesting + 1).chr.to_s + macro_name,
+          documentation: documentation.try { |doc| LSP::MarkupContent.new(kind: LSP::MarkupKind::MarkDown, value: doc) },
+        )
+      }
+    end
+  end
+
+  private def add_module_completions(node, nodes, range, trigger_character, result, completion_items)
+    node_type = node.type?
+    node_type ||= Utils.resolve_path(node, nodes) if node.is_a? Crystal::Path
+
+    if node_type.is_a? Crystal::MetaclassType
+      node_type = node_type.instance_type
+      Analysis.all_submodules(result, node_type).uniq(&.to_s).each { |type|
+        type_string = type.to_s
+        completion_items << LSP::CompletionItem.new(
+          label: type_string,
+          text_edit: LSP::TextEdit.new(range: range, new_text: type_string.lchop(node_type.to_s).lchop(trigger_character || ':')),
+          kind: Crystalline::Utils.map_completion_kind(type, default: LSP::CompletionItemKind::Module),
+          documentation: type.doc.try { |doc| LSP::MarkupContent.new(kind: LSP::MarkupKind::MarkDown, value: doc) },
+        )
+      }
+    end
+  end
+
+  private def add_context_completions(range, trigger_character, result, location, completion_items)
+    context = Analysis.context_at(result, location)
+    context.try &.select!(&.starts_with?("@")) if trigger_character == "@"
+
+    context.try &.each { |name, type|
+      completion_items << LSP::CompletionItem.new(
+        label: "#{name} : #{type}",
+        text_edit: LSP::TextEdit.new(range: range, new_text: name.lchop(trigger_character || "")),
+        kind: LSP::CompletionItemKind::Variable,
+        documentation: type.doc.try { |doc| LSP::MarkupContent.new(kind: LSP::MarkupKind::MarkDown, value: doc) },
+      )
+    }
+  end
+
+  private def collect_workspace_type(type, query, symbols)
+    type_name = type.name
+    return unless query.empty? || type_name.downcase.includes?(query)
+
+    if loc = type.name_location || type.location
+      symbols << LSP::SymbolInformation.new(
+        name: type_name,
+        kind: LSP::SymbolKind::Class,
+        deprecated: false,
+        location: LSP::Location.new(
+          uri: "file://#{loc.filename}",
+          range: LSP::Range.new(
+            start: LSP::Position.new(line: loc.line_number - 1, character: loc.column_number - 1),
+            end: LSP::Position.new(line: loc.line_number - 1, character: loc.column_number - 1)
+          )
+        ),
+        container_name: nil
+      )
+    end
+  end
+
+  private def collect_workspace_method(method, query, symbols, container_name)
+    return unless query.empty? || method.name.downcase.includes?(query)
+
+    if loc = method.name_location || method.location
+      symbols << LSP::SymbolInformation.new(
+        name: method.name,
+        kind: method.macro ? LSP::SymbolKind::Function : LSP::SymbolKind::Method,
+        deprecated: false,
+        location: LSP::Location.new(
+          uri: "file://#{loc.filename}",
+          range: LSP::Range.new(
+            start: LSP::Position.new(line: loc.line_number - 1, character: loc.column_number - 1),
+            end: LSP::Position.new(line: loc.line_number - 1, character: loc.column_number - 1 + method.name_size)
+          )
+        ),
+        container_name: container_name
+      )
+    end
   end
 
   private def fix_source(source : String) : String

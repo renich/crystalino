@@ -105,25 +105,29 @@ module Crystalline::Lightweight
       if suffix_matches.size == 1
         suffix_matches.first
       elsif suffix_matches.size > 1 && (ns = namespace)
-        # Ambiguous bare name (`Location` is both `Crystal::Location` and
-        # `Time::Location`): prefer the candidate sharing the longest
-        # namespace prefix with the enclosing type, the way the compiler's
-        # lexical resolution would pick the closest definition.
-        best = suffix_matches.first
-        best_score = common_prefix_length(best, ns)
-        suffix_matches.each do |candidate|
-          score = common_prefix_length(candidate, ns)
-          if score > best_score
-            best = candidate
-            best_score = score
-          end
-        end
-        common_prefix_length(best, namespace) > 0 ? best : nil
+        resolve_ambiguous_type_name(suffix_matches, ns)
       elsif suffix_matches.empty? && !normalized.includes?('(')
         # A bare generic name (`Channel`) resolves to its first
         # specialization (`Channel(T)`), like the index keys it.
         generic_candidate_names(normalized).sort_by(&.size).first?
       end
+    end
+
+    private def resolve_ambiguous_type_name(matches : Array(String), namespace : String) : String?
+      # Ambiguous bare name (`Location` is both `Crystal::Location` and
+      # `Time::Location`): prefer the candidate sharing the longest
+      # namespace prefix with the enclosing type, the way the compiler's
+      # lexical resolution would pick the closest definition.
+      best = matches.first
+      best_score = common_prefix_length(best, namespace)
+      matches.each do |candidate|
+        score = common_prefix_length(candidate, namespace)
+        if score > best_score
+          best = candidate
+          best_score = score
+        end
+      end
+      common_prefix_length(best, namespace) > 0 ? best : nil
     end
 
     private def common_prefix_length(name_a : String, name_b : String) : Int32
@@ -186,9 +190,9 @@ module Crystalline::Lightweight
       end
       return methods if summary_methods.empty?
       summary_returns = {} of String => String
-      summary_methods.each do |sm|
-        next unless return_type = sm.return_type
-        key = "#{sm.name}:#{sm.class_method}:#{sm.args.size}"
+      summary_methods.each do |summary_method|
+        next unless return_type = summary_method.return_type
+        key = "#{summary_method.name}:#{summary_method.class_method}:#{summary_method.args.size}"
         summary_returns[key] = return_type unless summary_returns.has_key?(key)
       end
       methods.map do |method|
@@ -340,7 +344,7 @@ module Crystalline::Lightweight
 
     def instance_vars_for(type_name : String) : Hash(String, Array(String))
       summary_types_for(type_name).each do |summary_type|
-        return normalize_ivar_keys(summary_type.instance_vars, class_var: false) if summary_type.instance_vars.any?
+        return normalize_ivar_keys(summary_type.instance_vars, class_var: false) if !summary_type.instance_vars.empty?
       end
 
       ivars = (overlay_type(type_name) || @index.types[type_name]? || @secondary.try(&.types[type_name]?)).try(&.ivars)
@@ -348,18 +352,18 @@ module Crystalline::Lightweight
 
       # Parsed types are best-effort (`Mutex` for `Mutex.new`): resolve them
       # against the merged index so they match what methods_for expects.
-      ivars.transform_values { |types| types.map { |t| resolve_type_name(t, namespace: type_name) || t }.uniq! }
+      ivars.transform_values(&.map { |type_name_str| resolve_type_name(type_name_str, namespace: type_name) || type_name_str }.uniq!)
     end
 
     def class_vars_for(type_name : String) : Hash(String, Array(String))
       summary_types_for(type_name).each do |summary_type|
-        return normalize_ivar_keys(summary_type.class_vars, class_var: true) if summary_type.class_vars.any?
+        return normalize_ivar_keys(summary_type.class_vars, class_var: true) if !summary_type.class_vars.empty?
       end
 
       class_vars = (overlay_type(type_name) || @index.types[type_name]? || @secondary.try(&.types[type_name]?)).try(&.class_vars)
       return {} of String => Array(String) unless class_vars
 
-      class_vars.transform_values { |types| types.map { |t| resolve_type_name(t, namespace: type_name) || t }.uniq! }
+      class_vars.transform_values(&.map { |type_name_str| resolve_type_name(type_name_str, namespace: type_name) || type_name_str }.uniq!)
     end
 
     # The compiled program keys ivars without the `@` prefix; the inference
@@ -391,7 +395,7 @@ module Crystalline::Lightweight
     private def namespace_candidates(namespace : String) : Array(String)
       parts = namespace.split("::")
       candidates = [] of String
-      while parts.any?
+      while !parts.empty?
         candidates << parts.join("::")
         parts.pop
       end
@@ -420,6 +424,54 @@ module Crystalline::Lightweight
       methods = [] of MethodInfo
       parent_types = [] of String
 
+      collect_base_type_methods(type_name, methods, parent_types, class_method, include_macros, visited)
+
+      # A project type may shadow a stdlib type of the same name (e.g. the
+      # `class URI` extension in ext/uri.cr, which has no superclass):
+      # merge the secondary's methods and parents so the full stdlib
+      # surface stays available on the extended type.
+      if secondary_type = @secondary.try(&.types[type_name]?)
+        methods = merge_methods(methods, select_methods(secondary_type.methods, secondary_type, class_method, include_macros))
+        parent_types.concat(secondary_type.parent_types)
+      end
+
+      merge_overlay_methods!(methods, parent_types, type_name, class_method, include_macros)
+
+      parent_types.uniq!
+      methods = merge_parent_methods(methods, parent_types, type_name, class_method, include_macros, visited)
+
+      summary_types_for(type_name).each do |summary_type|
+        methods = merge_methods(methods, summary_type.methods.select(&.class_method.==(class_method)))
+      end
+
+      if methods.empty? && parent_types.empty?
+        methods = resolve_generic_fallback_methods(type_name, class_method, include_macros, visited)
+      end
+
+      methods
+    end
+
+    private def merge_overlay_methods!(methods : Array(MethodInfo), parent_types : Array(String), type_name : String, class_method : Bool, include_macros : Bool) : Nil
+      # A dirty-buffer overlay redefines methods of a type: a same-signature
+      # method wins when its location differs from the indexed one (the
+      # user edited the definition), otherwise the indexed method is kept.
+      if overlay_type = @overlay.try(&.types[type_name]?)
+        overlay_methods = select_methods(overlay_type.methods, overlay_type, class_method, include_macros)
+        overlay_methods.each do |method|
+          next if method.class_method != class_method || (!include_macros && method.macro)
+
+          if existing_index = methods.index { |existing| Index.same_method?(existing, method) }
+            existing = methods[existing_index]
+            methods[existing_index] = method if existing.location != method.location
+          else
+            methods << method
+          end
+        end
+        parent_types.concat(overlay_type.parent_types)
+      end
+    end
+
+    private def collect_base_type_methods(type_name : String, methods : Array(MethodInfo), parent_types : Array(String), class_method : Bool, include_macros : Bool, visited : Set(String)) : Nil
       if type = @index.types[type_name]?
         methods.concat(select_methods(type.methods, type, class_method, include_macros))
         parent_types.concat(type.parent_types)
@@ -437,35 +489,9 @@ module Crystalline::Lightweight
         methods.concat(select_methods(type.methods, type, class_method, include_macros))
         parent_types.concat(type.parent_types)
       end
+    end
 
-      # A project type may shadow a stdlib type of the same name (e.g. the
-      # `class URI` extension in ext/uri.cr, which has no superclass):
-      # merge the secondary's methods and parents so the full stdlib
-      # surface stays available on the extended type.
-      if secondary_type = @secondary.try(&.types[type_name]?)
-        methods = merge_methods(methods, select_methods(secondary_type.methods, secondary_type, class_method, include_macros))
-        parent_types.concat(secondary_type.parent_types)
-      end
-
-      # A dirty-buffer overlay redefines methods of a type: a same-signature
-      # method wins when its location differs from the indexed one (the
-      # user edited the definition), otherwise the indexed method is kept.
-      if overlay_type = @overlay.try(&.types[type_name]?)
-        overlay_methods = select_methods(overlay_type.methods, overlay_type, class_method, include_macros)
-        overlay_methods.each do |method|
-          next unless method.class_method == class_method && (include_macros || !method.macro)
-
-          if existing_index = methods.index { |existing| Index.same_method?(existing, method) }
-            existing = methods[existing_index]
-            methods[existing_index] = method if existing.location != method.location
-          else
-            methods << method
-          end
-        end
-        parent_types.concat(overlay_type.parent_types)
-      end
-
-      parent_types.uniq!
+    private def merge_parent_methods(methods : Array(MethodInfo), parent_types : Array(String), type_name : String, class_method : Bool, include_macros : Bool, visited : Set(String)) : Array(MethodInfo)
       parent_types.each do |parent_type|
         resolved_parent = resolve_parent_name(parent_type, type_name)
         # An alias to a union (`alias Value = Int8 | Int16 | ...`): split
@@ -482,29 +508,27 @@ module Crystalline::Lightweight
         end
         methods = merge_methods(methods, methods_for(resolved_parent, class_method: class_method, include_macros: include_macros, visited: visited))
       end
+      methods
+    end
 
-      summary_types_for(type_name).each do |summary_type|
-        methods = merge_methods(methods, summary_type.methods.select(&.class_method.==(class_method)))
-      end
-      if methods.empty? && parent_types.empty?
-        if !type_name.includes?('(')
-          # The source index keys generic classes as `Dispatcher(T)`: a
-          # bare `Dispatcher` lookup falls back to the first
-          # specialization so self-calls, getters and hovers resolve on
-          # generic types too.
-          generic_candidate_names(type_name).sort_by(&.size).each do |candidate|
-            methods = methods_for(candidate, class_method: class_method, include_macros: include_macros, visited: visited)
-            break unless methods.empty?
-          end
-        end
-        if methods.empty? && (base_name = type_name.split('(').first?) && base_name != type_name
-          # A specialization like `Proc(String, URI, String)` (e.g. the
-          # target of an alias) resolves through the generic template
-          # `Proc(*T, R)`.
-          methods = methods_for(base_name, class_method: class_method, include_macros: include_macros, visited: visited)
+    private def resolve_generic_fallback_methods(type_name : String, class_method : Bool, include_macros : Bool, visited : Set(String)) : Array(MethodInfo)
+      methods = [] of MethodInfo
+      if !type_name.includes?('(')
+        # The source index keys generic classes as `Dispatcher(T)`: a
+        # bare `Dispatcher` lookup falls back to the first
+        # specialization so self-calls, getters and hovers resolve on
+        # generic types too.
+        generic_candidate_names(type_name).sort_by(&.size).each do |candidate|
+          methods = methods_for(candidate, class_method: class_method, include_macros: include_macros, visited: visited)
+          break unless methods.empty?
         end
       end
-
+      if methods.empty? && (base_name = type_name.split('(').first?) && base_name != type_name
+        # A specialization like `Proc(String, URI, String)` (e.g. the
+        # target of an alias) resolves through the generic template
+        # `Proc(*T, R)`.
+        methods = methods_for(base_name, class_method: class_method, include_macros: include_macros, visited: visited)
+      end
       methods
     end
 
@@ -530,18 +554,7 @@ module Crystalline::Lightweight
 
     private def delegate_target_methods(type : TypeInfo, target : String, class_method : Bool, include_macros : Bool, visited : Set(String), mapping : Hash(String, String)? = nil, receiver_name : String? = nil) : Array(MethodInfo)
       return [] of MethodInfo unless target.starts_with?('@')
-      target_types = type.ivars[target]? || type.class_vars[target]? || [] of String
-      if target_types.empty?
-        # The compiled index carries no ivars; the semantic summary does
-        # (concrete per instantiation when the receiver is a
-        # specialization).
-        if receiver_name && receiver_name != type.name
-          target_types = instance_vars_for(receiver_name)[target]? || [] of String
-        end
-        if target_types.empty?
-          target_types = instance_vars_for(type.name)[target]? || type.class_vars[target]? || [] of String
-        end
-      end
+      target_types = resolve_delegate_target_types(type, target, receiver_name)
       # The target's element type is usually a bare name (`Item(V)` inside
       # `Array(Item(V))`): resolve it against the receiver's namespace so
       # the delegated methods carry fully-qualified types.
@@ -560,6 +573,22 @@ module Crystalline::Lightweight
         # own key, which the copy carries over).
         methods_for(substituted, class_method: false, include_macros: include_macros, visited: visited.dup)
       end
+    end
+
+    private def resolve_delegate_target_types(type : TypeInfo, target : String, receiver_name : String?) : Array(String)
+      target_types = type.ivars[target]? || type.class_vars[target]? || [] of String
+      if target_types.empty?
+        # The compiled index carries no ivars; the semantic summary does
+        # (concrete per instantiation when the receiver is a
+        # specialization).
+        if receiver_name && receiver_name != type.name
+          target_types = instance_vars_for(receiver_name)[target]? || [] of String
+        end
+        if target_types.empty?
+          target_types = instance_vars_for(type.name)[target]? || type.class_vars[target]? || [] of String
+        end
+      end
+      target_types
     end
 
     # Resolves a type name against *namespace*, descending into generic
@@ -802,21 +831,7 @@ module Crystalline::Lightweight
       summary_methods.each do |summary_method|
         key = method_merge_key(summary_method)
         if index = existing_index[key]?
-          existing = merged[index]
-          merged[index] = MethodInfo.new(
-            name: existing.name,
-            owner: existing.owner,
-            args: existing.args.empty? ? summary_method.args : existing.args,
-            return_type: summary_method.return_type || existing.return_type,
-            class_method: existing.class_method,
-            macro: existing.macro,
-            doc: existing.doc || summary_method.doc,
-            location: existing.location || summary_method.location,
-            name_location: existing.name_location || summary_method.name_location,
-            name_size: existing.name_size.zero? ? summary_method.name_size : existing.name_size,
-            free_vars: existing.free_vars.empty? ? summary_method.free_vars : existing.free_vars,
-            block_restriction: existing.block_restriction || summary_method.block_restriction,
-          )
+          merged[index] = merge_method_info(merged[index], summary_method)
         else
           existing_index[key] = merged.size
           merged << summary_method
@@ -824,6 +839,23 @@ module Crystalline::Lightweight
       end
 
       merged
+    end
+
+    private def merge_method_info(existing : MethodInfo, summary_method : MethodInfo) : MethodInfo
+      MethodInfo.new(
+        name: existing.name,
+        owner: existing.owner,
+        args: existing.args.empty? ? summary_method.args : existing.args,
+        return_type: summary_method.return_type || existing.return_type,
+        class_method: existing.class_method,
+        macro: existing.macro,
+        doc: existing.doc || summary_method.doc,
+        location: existing.location || summary_method.location,
+        name_location: existing.name_location || summary_method.name_location,
+        name_size: existing.name_size.zero? ? summary_method.name_size : existing.name_size,
+        free_vars: existing.free_vars.empty? ? summary_method.free_vars : existing.free_vars,
+        block_restriction: existing.block_restriction || summary_method.block_restriction,
+      )
     end
 
     private def method_merge_key(method : MethodInfo) : String

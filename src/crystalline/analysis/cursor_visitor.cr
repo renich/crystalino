@@ -74,7 +74,7 @@ module Crystalline::Analysis
       @scoped_vars = @previous_vars
     end
 
-    def visit(node)
+    private def compute_contains_node(node : Crystal::ASTNode) : Bool
       if node_location = node.location
         node_end_location = nearest_end_location(node)
 
@@ -86,8 +86,13 @@ module Crystalline::Analysis
           )
         end
 
-        contains_node = @target_location.between?(node_location, node_end_location) if node_end_location
+        return @target_location.between?(node_location, node_end_location) if node_end_location
       end
+      false
+    end
+
+    def visit(node)
+      contains_node = compute_contains_node(node)
 
       if contains_node
         @nodes << node

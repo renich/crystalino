@@ -32,6 +32,64 @@ module Crystalline
       end
     end
 
+    private def handle_interpolation_depth(line : String, index : Int32, interpolation_depth : Int32, string_start : Int32, interpolation_start : Int32, ranges : Array(Range(Int32, Int32)))
+      if line[index] == '{'
+        interpolation_depth += 1
+      elsif line[index] == '}'
+        interpolation_depth -= 1
+        if interpolation_depth == 0
+          ranges << (string_start...interpolation_start) if string_start < interpolation_start
+          string_start = index + 1
+        end
+      end
+      {interpolation_depth, string_start}
+    end
+
+    private def mask_double_quotes(line : String, index : Int32, ranges : Array(Range(Int32, Int32))) : Int32
+      index += 1
+      string_start = index - 1
+      interpolation_start = -1
+      interpolation_depth = 0
+      while index < line.size
+        if line[index] == '\\'
+          index += 2
+          next
+        end
+        if interpolation_depth > 0
+          interpolation_depth, string_start = handle_interpolation_depth(line, index, interpolation_depth, string_start, interpolation_start, ranges)
+          index += 1
+          next
+        end
+        if line[index] == '#' && line[index + 1]? == '{'
+          interpolation_start = index
+          interpolation_depth = 1
+          index += 2
+          next
+        end
+        break if line[index] == '"'
+        index += 1
+      end
+      index += 1 if index < line.size
+      ranges << (string_start...index) if string_start < index
+      index
+    end
+
+    private def mask_single_quotes(line : String, index : Int32, ranges : Array(Range(Int32, Int32))) : Int32
+      start = index
+      index += 1
+      while index < line.size
+        if line[index] == '\\'
+          index += 2
+          next
+        end
+        break if line[index] == '\''
+        index += 1
+      end
+      index += 1 if index < line.size
+      ranges << (start...index)
+      index
+    end
+
     # Masks comments, double-quoted strings and char literals on one line.
     private def mask_line(line : String, line_index : Int32)
       ranges = [] of Range(Int32, Int32)
@@ -42,54 +100,9 @@ module Crystalline
           ranges << (index...line.size)
           break
         when '"'
-          index += 1
-          string_start = index - 1
-          interpolation_start = -1
-          interpolation_depth = 0
-          while index < line.size
-            if line[index] == '\\'
-              index += 2
-              next
-            end
-            if interpolation_depth > 0
-              if line[index] == '{'
-                interpolation_depth += 1
-              elsif line[index] == '}'
-                interpolation_depth -= 1
-                if interpolation_depth == 0
-                  # The interpolation body is code, not string content:
-                  # leave it unmasked.
-                  ranges << (string_start...interpolation_start) if string_start < interpolation_start
-                  string_start = index + 1
-                end
-              end
-              index += 1
-              next
-            end
-            if line[index] == '#' && line[index + 1]? == '{'
-              interpolation_start = index
-              interpolation_depth = 1
-              index += 2
-              next
-            end
-            break if line[index] == '"'
-            index += 1
-          end
-          index += 1 if index < line.size
-          ranges << (string_start...index) if string_start < index
+          index = mask_double_quotes(line, index, ranges)
         when '\''
-          start = index
-          index += 1
-          while index < line.size
-            if line[index] == '\\'
-              index += 2
-              next
-            end
-            break if line[index] == '\''
-            index += 1
-          end
-          index += 1 if index < line.size
-          ranges << (start...index)
+          index = mask_single_quotes(line, index, ranges)
         else
           index += 1
         end

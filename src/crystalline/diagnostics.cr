@@ -19,9 +19,8 @@ class Crystalline::Diagnostics
     self
   end
 
-  def append_from_exception(error : Crystal::ErrorFormat)
+  private def build_error_stack(error : Crystal::ErrorFormat)
     error_stack = Deque(Crystal::ErrorFormat).new
-
     loop do
       error_stack << error if error.is_a? Crystal::ErrorFormat
       if error.responds_to? :inner
@@ -30,18 +29,28 @@ class Crystalline::Diagnostics
         break
       end
     end
+    error_stack
+  end
+
+  private def extract_line_and_column(err : Crystal::ErrorFormat) : {Int32, Int32?}
+    if err.filename.is_a? Crystal::VirtualFile && (expanded_source = err.filename.as(Crystal::VirtualFile).expanded_location)
+      line = expanded_source.line_number || 1
+      column = expanded_source.column_number
+    else
+      line = err.line_number || 1
+      column = err.column_number
+    end
+    {line, column}
+  end
+
+  def append_from_exception(error : Crystal::ErrorFormat)
+    error_stack = build_error_stack(error)
 
     related_information = [] of LSP::DiagnosticRelatedInformation
 
     error_stack.each_with_index { |err, i|
       bottom_error = i == error_stack.size - 1
-      if err.filename.is_a? Crystal::VirtualFile && (expanded_source = err.filename.as(Crystal::VirtualFile).expanded_location)
-        line = expanded_source.line_number || 1
-        column = expanded_source.column_number
-      else
-        line = err.line_number || 1
-        column = err.column_number
-      end
+      line, column = extract_line_and_column(err)
 
       if bottom_error
         self.append(LSP::Diagnostic.new(

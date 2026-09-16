@@ -13,9 +13,16 @@ module Crystalline::Lightweight
     CAST_SEGMENT     = "__lightweight_cast__"
 
     def receiver_types(source : String, line_number : Int32, analysis_column : Int32, receiver : String, query : Query) : {Array(String), Bool}
-      # A quoted-string root (`"= #{a.b}".colorize`) contains dots inside
-      # the interpolation: split on dots only outside quotes so the root
-      # stays the whole literal.
+      segments = split_receiver_segments(receiver)
+      return {[] of String, false} if segments.empty?
+
+      type_names, class_method = root_receiver_types(source, line_number, analysis_column, segments.shift, query)
+      return {[] of String, class_method} if type_names.empty?
+
+      resolve_segment_chain(segments, type_names, class_method, query)
+    end
+
+    private def split_receiver_segments(receiver : String) : Array(String)
       segments = [] of String
       if receiver.starts_with?('"')
         start = 0
@@ -33,11 +40,10 @@ module Crystalline::Lightweight
       else
         segments = receiver.split('.').reject(&.empty?)
       end
-      return {[] of String, false} if segments.empty?
+      segments
+    end
 
-      type_names, class_method = root_receiver_types(source, line_number, analysis_column, segments.shift, query)
-      return {[] of String, class_method} if type_names.empty?
-
+    private def resolve_segment_chain(segments : Array(String), type_names : Array(String), class_method : Bool, query : Query) : {Array(String), Bool}
       index = 0
       while index < segments.size
         segment = segments[index]
@@ -48,143 +54,127 @@ module Crystalline::Lightweight
             return {safe_receiver_types, false}
           end
 
-          # `x.try(&.foo[1]?)` — the nilable index after the try.
           safe_method = "[]" if safe_method == INDEX_SEGMENT
           safe_method = "[]?" if safe_method == "#{INDEX_SEGMENT}?"
           type_names, class_method = safe_chained_call_types(type_names, class_method, safe_method, query)
           return {[] of String, class_method} if type_names.empty?
           index += 2
         else
-          segment = "[]" if segment == INDEX_SEGMENT
-          # `types[type_name]?` — a nilable index — normalizes to the
-          # index segment with a `?` suffix: resolve it like `[]?`.
-          segment = "[]?" if segment == "#{INDEX_SEGMENT}?"
-          if segment == RANGE_SEGMENT
-            # `arr[1..]` / `arr[1...]` — a range index returns the
-            # array itself (a slice), not an element: keep the receiver
-            # types flowing through the chain.
-            type_names = type_names.reject(&.==("Nil")).uniq!
-            class_method = false
-          elsif segment == "#{RANGE_SEGMENT}?"
-            # `arr[1..]?` — the nilable slice: the array or nil.
-            type_names = (type_names.reject(&.==("Nil")).uniq! + ["Nil"]).uniq
-            class_method = false
-          elsif segment == "as" || segment == "as?"
-            # `as`/`as?` casts are compiler specials: this segment is the
-            # method-name half of a preserved cast call, and the cast-target
-            # segment that follows overrides the receiver types.
-          elsif segment.starts_with?(CAST_SEGMENT)
-            # `as`/`as?` casts are compiler specials, not indexed methods:
-            # the normalizer kept the target type in this segment, and the
-            # target names the cast result.
-            if target = segment[CAST_SEGMENT.size + 1..]?
-              target = target.rchop(')')
-              type_names = [target]
-              class_method = false
-            else
-              return {[] of String, class_method}
-            end
-          else
-            # A call segment with args (`Crystal::Parser.new(text)` splits
-            # on '.' into `Crystal::Parser` + `new(text)`): the args group
-            # is not part of the method name.
-            segment = segment.split('(').first? || segment
-            type_names, class_method = chained_call_types(type_names, class_method, segment, query)
-            return {[] of String, class_method} if type_names.empty?
-          end
+          type_names, class_method, should_return = resolve_single_segment(segment, type_names, class_method, query)
+          return {[] of String, class_method} if should_return
           index += 1
         end
       end
-
       {type_names, class_method}
     end
 
+    private def resolve_single_segment(segment : String, type_names : Array(String), class_method : Bool, query : Query) : {Array(String), Bool, Bool}
+      segment = "[]" if segment == INDEX_SEGMENT
+      segment = "[]?" if segment == "#{INDEX_SEGMENT}?"
+      if segment == RANGE_SEGMENT
+        type_names = type_names.reject(&.==("Nil")).uniq!
+        class_method = false
+      elsif segment == "#{RANGE_SEGMENT}?"
+        type_names = (type_names.reject(&.==("Nil")).uniq! + ["Nil"]).uniq
+        class_method = false
+      elsif segment.in?("as", "as?")
+      elsif segment.starts_with?(CAST_SEGMENT)
+        target = segment[CAST_SEGMENT.size + 1..]?
+        if target
+          target = target.rchop(')')
+          type_names = [target]
+          class_method = false
+        else
+          return {[] of String, class_method, true}
+        end
+      else
+        segment = segment.split('(').first? || segment
+        type_names, class_method = chained_call_types(type_names, class_method, segment, query)
+        return {[] of String, class_method, true} if type_names.empty?
+      end
+      {type_names, class_method, false}
+    end
+
     def receiver_from_prefix(prefix : String) : String
-      # `rstrip` also clears trailing whitespace: a chain continuation
-      # (`greeter\n    .method`) leaves only whitespace between the
-      # previous line's receiver and the trigger dot, and without the
-      # strip the walk-back stops at the whitespace, producing an empty
-      # receiver (or one that drags the whitespace along).
       normalized_prefix = normalize_receiver_prefix(prefix).rstrip('.').rstrip
 
-      start = normalized_prefix.size
-      while start > 0 && receiver_expression_char?(normalized_prefix[start - 1])
+      start = scan_receiver_start(normalized_prefix, normalized_prefix.size)
+      start = extend_back_quoted_string(normalized_prefix, start)
+      normalized_prefix, start = extend_back_block_tail(normalized_prefix, start)
+      start = extend_back_cast_segment(normalized_prefix, start)
+
+      receiver = normalized_prefix[start..]? || ""
+      strip_range_operator(receiver)
+    end
+
+    private def scan_receiver_start(prefix : String, start : Int32) : Int32
+      while start > 0 && receiver_expression_char?(prefix[start - 1])
         start -= 1
       end
+      start
+    end
 
-      # A quoted-string receiver (`"✅ #{project_name}".colorize`): the
-      # closing quote stops the expression-char scan, so extend back to
-      # the opening quote (the last one before it). Applies both when the
-      # prefix ends at the quote (first hop) and mid-chain (`"x".foo.bar`:
-      # the scan stops at the quote after the leading dot).
+    private def extend_back_quoted_string(normalized_prefix : String, start : Int32) : Int32
       if start > 0 && normalized_prefix[start - 1] == '"'
         if open_quote = normalized_prefix.rindex('"', start - 2)
-          start = open_quote
+          return open_quote
         end
       end
+      start
+    end
 
-      # A `do ... end` block tail (`flat_map do |x| ... end.uniq`, with
-      # the `end` possibly followed by a chain suffix: `... end.flatten.`):
-      # the trailing call's receiver starts at the block's `end`, so cut
-      # the block text at the matching `do` and keep any suffix.
+    private def extend_back_block_tail(normalized_prefix : String, start : Int32) : {String, Int32}
       receiver = normalized_prefix[start..]? || ""
-      if receiver.size >= 3 && receiver.starts_with?("end") && (receiver.size == 3 || receiver[3]? == '.')
-        # Scan backward from just before the closer: the closer itself is
-        # the anchor and must not be counted (its matching `do` is the one
-        # that brings the depth back to zero).
-        # `String#[](index : Int)` is O(n) (a character-index scan), so
-        # index the char array instead of the raw string.
-        chars = normalized_prefix.chars
-        depth = 1
-        index = start - 1
-        do_index = -1
-        # An `end` followed (going back) by `else`/`elsif` closes an
-        # `if`/`case`, not a `do` block: undo its depth contribution.
-        else_seen = false
-        while index >= 0 && depth > 0
-          if token_char?(chars[index])
-            token_end = index + 1
-            token_start = index
-            while token_start > 0 && token_char?(chars[token_start - 1])
-              token_start -= 1
-            end
-            # `String#[](start, count)` is O(start): build the token from
-            # the char array (the same reason the loops index `chars`).
-            token = String.build(token_end - token_start) do |io|
-              (token_start...token_end).each { |i| io << chars[i] }
-            end
-            if token == "end"
-              depth += 1
-              else_seen = false
-            elsif token == "do"
-              depth -= 1
-              do_index = token_start if depth == 0
-            elsif (token == "else" || token == "elsif") && !else_seen
-              depth -= 1
-              else_seen = true
-            end
-            index = token_start - 1
-          else
-            index -= 1
+      return {normalized_prefix, start} unless receiver.size >= 3 && receiver.starts_with?("end") && (receiver.size == 3 || receiver[3]? == '.')
+
+      do_index = find_do_block_start(normalized_prefix.chars, start - 1)
+      if do_index
+        suffix = normalized_prefix[start + 3..]? || ""
+        new_prefix = normalized_prefix[0, do_index].rstrip + suffix
+        new_start = scan_receiver_start(new_prefix, new_prefix.size)
+        return {new_prefix, new_start}
+      end
+      {normalized_prefix, start}
+    end
+
+    private def find_do_block_start(chars : Array(Char), index : Int32) : Int32?
+      depth = 1
+      do_index = nil
+      else_seen = false
+      while index >= 0 && depth > 0
+        if token_char?(chars[index])
+          token, token_start = build_backward_token(chars, index)
+          if token == "end"
+            depth += 1
+            else_seen = false
+          elsif token == "do"
+            depth -= 1
+            do_index = token_start if depth == 0
+          elsif token.in?("else", "elsif") && !else_seen
+            depth -= 1
+            else_seen = true
           end
-        end
-        if do_index >= 0
-          suffix = normalized_prefix[start + 3..]? || ""
-          normalized_prefix = normalized_prefix[0, do_index].rstrip + suffix
-          start = normalized_prefix.size
-          while start > 0 && receiver_expression_char?(normalized_prefix[start - 1])
-            start -= 1
-          end
+          index = token_start - 1
+        else
+          index -= 1
         end
       end
+      do_index
+    end
 
-      # A cast segment (`.__lightweight_cast__(T)`) ends with a balanced
-      # group. Walk back through it so the receiver keeps the cast target
-      # instead of stopping at the closing paren. Only cast segments leave
-      # a `)` in the normalized prefix — other groups are dropped — so the
-      # segment marker must be present, otherwise the paren is an orphan
-      # (e.g. a `try(&...)` call nested in a dropped group) and the
-      # receiver stays empty.
+    private def build_backward_token(chars : Array(Char), index : Int32) : {String, Int32}
+      token_end = index + 1
+      token_start = index
+      while token_start > 0 && token_char?(chars[token_start - 1])
+        token_start -= 1
+      end
+      token = String.build(token_end - token_start) do |io|
+        (token_start...token_end).each { |i| io << chars[i] }
+      end
+      {token, token_start}
+    end
+
+    private def extend_back_cast_segment(normalized_prefix : String, start : Int32) : Int32
       if start > 0 && normalized_prefix[start - 1] == ')' && normalized_prefix[0, start]?.try(&.includes?(CAST_SEGMENT))
         depth = 0
         while start > 0
@@ -194,21 +184,15 @@ module Crystalline::Lightweight
           depth -= 1 if char == '('
           break if depth == 0
         end
-        while start > 0 && receiver_expression_char?(normalized_prefix[start - 1])
-          start -= 1
-        end
+        start = scan_receiver_start(normalized_prefix, start)
       end
+      start
+    end
 
-      receiver = normalized_prefix[start..]? || ""
-      # A range operator inside the receiver (`range.start.line..range.end`)
-      # is not a method call: the receiver of the trailing call is the
-      # part after the last `..` (`a..b.foo` parses as `a..(b.foo)`, so
-      # `foo`'s receiver is `b`). Skipped when a quote is present (a
-      # `..` inside a string literal must stay intact).
+    private def strip_range_operator(receiver : String) : String
       if !receiver.includes?('"') && !receiver.includes?('\'') && (range_index = receiver.rindex(".."))
-        receiver = receiver[range_index + 2..]? || ""
+        return receiver[range_index + 2..]? || ""
       end
-
       receiver
     end
 
@@ -221,7 +205,7 @@ module Crystalline::Lightweight
       single = receiver_from_prefix(prefix)
       if single.empty? || (single.starts_with?("end") && (single.size == 3 || single[3]? == '.')) || single.starts_with?('.')
         full_prefix = String.build do |io|
-          source.lines(chomp: false)[0...line_number].each { |l| io << l }
+          source.lines(chomp: false)[0...line_number].each { |line| io << line }
           io << prefix
         end
         receiver_from_prefix(full_prefix)
@@ -236,196 +220,29 @@ module Crystalline::Lightweight
 
     private def normalize_receiver_prefix(prefix : String) : String
       normalized_prefix = prefix
-        # `try(&.x)` / `try &.x` / mid-edit `try(&` — the `&.`-form block
-        # is not a parseable group, so it gets a dedicated segment (the
-        # block receiver of try is the call's own receiver).
         .gsub(/\.try\s*(?:\(\s*)?&\s*\./, ".#{SAFE_TRY_SEGMENT}.")
         .gsub(/\.try\s*(?:\(\s*)?&\s*$/, ".#{SAFE_TRY_SEGMENT}.")
         .gsub(/[ \t]+\(/, "(")
 
-      result = String.build do |str|
-        # `String#[](index : Int)` is O(n) (a character-index scan), so
-        # indexing the raw string inside these loops would be quadratic
-        # on multi-line prefixes: index the char array instead.
+      String.build do |str|
         chars = normalized_prefix.chars
         index = 0
         quote = nil.as(Char?)
         while index < chars.size
           char = chars[index]
           if quote
-            # Inside a string: copy verbatim — a paren or bracket in the
-            # text (`"Array(#{...})"`) is not code and must not open a group.
-            str << char
-            if char == '\\'
-              if escaped = chars[index + 1]?
-                str << escaped
-                index += 2
-                next
-              end
-            elsif char == quote
-              quote = nil
-            end
-            index += 1
+            index, quote = handle_normalizer_quote(chars, index, str, quote)
           elsif char.in?('"', '\'')
             quote = char
             str << char
             index += 1
           elsif char == '#'
-            # A comment is not code: copy it verbatim so a paren or
-            # bracket inside it (e.g. `(only the body's effects`) never
-            # opens a group that swallows the rest of the prefix.
-            comment_start = index
-            index += 1
-            while index < chars.size && chars[index] != '\n'
-              index += 1
-            end
-            str << normalized_prefix[comment_start...index]
+            index = handle_normalizer_comment(chars, index, str, normalized_prefix)
           elsif char == '['
-            group_start = index
-            depth = 1
-            quote = nil.as(Char?)
-            index += 1
-            while index < chars.size && depth > 0
-              current = chars[index]
-              if quote
-                if current == '\\'
-                  index += 2
-                  next
-                elsif current == quote
-                  quote = nil
-                end
-              elsif current.in?('"', '\'')
-                quote = current
-              elsif current == '['
-                depth += 1
-              elsif current == ']'
-                depth -= 1
-              elsif current == '#'
-                # Skip comment text inside the group (e.g. a `# [note`
-                # between call args): it must not affect group balance.
-                # Strings are handled by the quote branch above, so an
-                # interpolation `#{...}` never reaches here.
-                index += 1
-                while index < chars.size && chars[index] != '\n'
-                  index += 1
-                end
-              end
-              index += 1
-            end
-            if depth > 0
-              # Unclosed bracket (mid-edit, e.g. `@local_types[target.`):
-              # keep the remainder (the `[` stops the receiver walk-back)
-              # so the receiver inside the brackets is still found.
-              (group_start...chars.size).each { |i| str << chars[i] }
-              index = chars.size
-            else
-              # `arr[1..]` / `arr[i..j]` — a range index slices the
-              # array, so the chain continues on the array itself (the
-              # resolver treats the range segment as identity). String
-              # literals inside the brackets (`arr[".."]`) are not ranges.
-              inner = String.build(index - group_start - 2) do |io|
-                (group_start + 1...index - 1).each { |i| io << chars[i] }
-              end
-              str << if inner.gsub(/"[^"]*"|'[^']*'/, "").includes?("..")
-                ".#{RANGE_SEGMENT}"
-              else
-                ".#{INDEX_SEGMENT}"
-              end
-              # `[] of String` — an array literal's of-clause: consume it
-              # so the walk-back lands on the index segment (the receiver
-              # root resolves it to `Array(T)`), not on the element type.
-              if chars[index]? == ' ' && chars[index + 1]? == 'o' && chars[index + 2]? == 'f' && (chars[index + 3]? == ' ' || chars[index + 3]? == nil)
-                index += 3
-                while chars[index]? == ' '
-                  index += 1
-                end
-                while chars[index]? && token_char?(chars[index])
-                  index += 1
-                end
-              end
-            end
+            index = consume_normalizer_bracket(chars, index, str)
           elsif char == '('
-            # Call arguments are dropped from the receiver expression so that
-            # chains like `factory.build("hi").sh` resolve through `build`.
-            # `as`/`as?` casts are the exception: the target type names the
-            # result, so it survives in a special segment.
-            group_start = index
-            depth = 1
-            index += 1
-            quote = nil.as(Char?)
-            while index < chars.size && depth > 0
-              current = chars[index]
-              if quote
-                if current == '\\'
-                  index += 2
-                  next
-                elsif current == quote
-                  quote = nil
-                end
-              elsif current.in?('"', '\'')
-                quote = current
-              elsif current == '#'
-                # Skip comment text inside the group: an apostrophe in a
-                # comment (e.g. `(only the body's effects`) must not be
-                # mistaken for a quote that swallows the rest of the file.
-                index += 1
-                while index < chars.size && chars[index] != '\n'
-                  index += 1
-                end
-              elsif current == '('
-                depth += 1
-              elsif current == ')'
-                depth -= 1
-              end
-              index += 1
-            end
-            if depth > 0
-              # Unclosed group (mid-edit, e.g. `unless (x = foo.b`): keep
-              # the remainder so the receiver inside the parens is still found.
-              (group_start...chars.size).each { |i| str << chars[i] }
-              index = chars.size
-            else
-              method_end = group_start
-              method_start = method_end
-              while method_start > 0 && token_char?(chars[method_start - 1])
-                method_start -= 1
-              end
-              # `String#[](start, count)` is O(start) (a character-index
-              # scan), so a slice near the end of a multi-line prefix
-              # would be quadratic across all groups: build from chars.
-              method_name = String.build(method_end - method_start) do |io|
-                (method_start...method_end).each { |i| io << chars[i] }
-              end
-              if method_name == "as" || method_name == "as?"
-                target = String.build(index - group_start - 2) do |io|
-                  (group_start + 1...index - 1).each { |i| io << chars[i] }
-                end
-                str << ".#{CAST_SEGMENT}(#{target})"
-              elsif method_name.empty? || method_name.in?("if", "unless", "while", "until", "return", "case", "?") || method_name.ends_with?(':')
-                # A parenthesized expression as receiver — `(expr).m`, or
-                # `(expr).try(&.m)` where the parens group the try receiver
-                # itself, or a control-flow condition `if (x = y).m` (the
-                # keyword is not a call, so the group is not its args):
-                # keep the inner expression so the chain still resolves.
-                # A bare `?` is the ternary operator (`x ? (a || b).m : c`)
-                # and a trailing `:` a keyword-arg label (`sort_text:
-                # (nesting + 1).chr`): neither is a call, so the group is
-                # the value, not call arguments.
-                # For a multi-expression inner (`a || b`) the walk-back
-                # keeps its last sub-expression, the usual approximation.
-                # The inner may itself contain groups and brackets
-                # (`(a || b[1]?).try(&.x)`): normalize it recursively so
-                # the walk-back does not stop at a raw `[`/`(`.
-                inner = String.build(index - group_start - 2) do |io|
-                  (group_start + 1...index - 1).each { |i| io << chars[i] }
-                end
-                str << normalize_receiver_prefix(inner)
-              end
-            end
+            index = consume_normalizer_paren(chars, index, str)
           elsif char == ')'
-            # A stray closer left by the `try(&.x)` rewrite above (it
-            # consumes the opening paren but not its match): a `)` that
-            # reaches the top level is never part of a receiver.
             index += 1
           else
             str << char
@@ -433,8 +250,124 @@ module Crystalline::Lightweight
           end
         end
       end
+    end
 
-      result
+    private def handle_normalizer_quote(chars : Array(Char), index : Int32, str : String::Builder, quote : Char) : {Int32, Char?}
+      char = chars[index]
+      str << char
+      if char == '\\'
+        if escaped = chars[index + 1]?
+          str << escaped
+          return {index + 2, quote}
+        end
+      elsif char == quote
+        return {index + 1, nil}
+      end
+      {index + 1, quote}
+    end
+
+    private def handle_normalizer_comment(chars : Array(Char), index : Int32, str : String::Builder, normalized_prefix : String) : Int32
+      comment_start = index
+      index += 1
+      while index < chars.size && chars[index] != '\n'
+        index += 1
+      end
+      str << normalized_prefix[comment_start...index]
+      index
+    end
+
+    private def consume_normalizer_bracket(chars : Array(Char), index : Int32, str : String::Builder) : Int32
+      group_start = index
+      index, depth = find_group_end(chars, index + 1, '[', ']')
+      if depth > 0
+        (group_start...chars.size).each { |i| str << chars[i] }
+        return chars.size
+      end
+
+      inner = String.build(index - group_start - 2) do |io|
+        (group_start + 1...index - 1).each { |i| io << chars[i] }
+      end
+      str << if inner.gsub(/"[^"]*"|'[^']*'/, "").includes?("..")
+        ".#{RANGE_SEGMENT}"
+      else
+        ".#{INDEX_SEGMENT}"
+      end
+      consume_of_clause(chars, index)
+    end
+
+    private def consume_of_clause(chars : Array(Char), index : Int32) : Int32
+      if chars[index]? == ' ' && chars[index + 1]? == 'o' && chars[index + 2]? == 'f' && (chars[index + 3]? == ' ' || chars[index + 3]? == nil)
+        index += 3
+        while chars[index]? == ' '
+          index += 1
+        end
+        while chars[index]? && token_char?(chars[index])
+          index += 1
+        end
+      end
+      index
+    end
+
+    private def consume_normalizer_paren(chars : Array(Char), index : Int32, str : String::Builder) : Int32
+      group_start = index
+      index, depth = find_group_end(chars, index + 1, '(', ')')
+      if depth > 0
+        (group_start...chars.size).each { |i| str << chars[i] }
+        return chars.size
+      end
+      method_end = group_start
+      method_start = method_end
+      while method_start > 0 && token_char?(chars[method_start - 1])
+        method_start -= 1
+      end
+      method_name = String.build(method_end - method_start) do |io|
+        (method_start...method_end).each { |i| io << chars[i] }
+      end
+      if method_name.in?("as", "as?")
+        target = String.build(index - group_start - 2) do |io|
+          (group_start + 1...index - 1).each { |i| io << chars[i] }
+        end
+        str << ".#{CAST_SEGMENT}(#{target})"
+      elsif method_name.empty? || method_name.in?("if", "unless", "while", "until", "return", "case", "?") || method_name.ends_with?(':')
+        inner = String.build(index - group_start - 2) do |io|
+          (group_start + 1...index - 1).each { |i| io << chars[i] }
+        end
+        str << normalize_receiver_prefix(inner)
+      end
+      index
+    end
+
+    private def find_group_end(chars : Array(Char), index : Int32, open_char : Char, close_char : Char) : {Int32, Int32}
+      depth = 1
+      quote = nil.as(Char?)
+      while index < chars.size && depth > 0
+        current = chars[index]
+        index, quote, depth = handle_group_char(chars, index, current, quote, depth, open_char, close_char)
+        index += 1
+      end
+      {index, depth}
+    end
+
+    private def handle_group_char(chars : Array(Char), index : Int32, current : Char, quote : Char?, depth : Int32, open_char : Char, close_char : Char) : {Int32, Char?, Int32}
+      if quote
+        if current == '\\'
+          return {index + 1, quote, depth}
+        elsif current == quote
+          return {index, nil, depth}
+        end
+      elsif current.in?('"', '\'')
+        return {index, current, depth}
+      elsif current == open_char
+        return {index, quote, depth + 1}
+      elsif current == close_char
+        return {index, quote, depth - 1}
+      elsif current == '#'
+        index += 1
+        while index < chars.size && chars[index] != '\n'
+          index += 1
+        end
+      end
+      {index, quote, depth}
     end
 
     def token_char?(char : Char)
@@ -494,14 +427,9 @@ module Crystalline::Lightweight
     end
 
     private def root_receiver_types(source : String, line_number : Int32, analysis_column : Int32, receiver : String, query : Query) : {Array(String), Bool}
-      # A negation receiver (`!@result_cache`) resolves like the operand.
       receiver = receiver.lchop('!')
 
-      if receiver == "__lightweight_index__" || receiver == "[]"
-        # An array literal receiver (`[a, b].compact_map`): the normalizer
-        # turned the bracket group into the index segment. The element
-        # type is not recoverable from the string, so fall back to the
-        # generic array — the chain still flows through `Array(T)`.
+      if receiver.in?("__lightweight_index__", "[]")
         return {["Array(T)"], false}
       end
 
@@ -509,22 +437,8 @@ module Crystalline::Lightweight
         return {["Nil"], false}
       end
 
-      # Literal receivers (`120.seconds`, `"x".size`, `'c'.ord`, `true`):
-      # type them from the literal form so stdlib methods resolve.
-      if receiver == "true" || receiver == "false"
-        return {["Bool"], false}
-      end
-      if receiver =~ /\A-?\d+_\d+\z/ || receiver =~ /\A-?\d+\z/
-        return {["Int32"], false}
-      end
-      if receiver =~ /\A-?\d+\.\d+\z/ || receiver =~ /\A-?\d+[eE][+-]?\d+\z/
-        return {["Float64"], false}
-      end
-      if receiver =~ /\A"[^"]*"\z/
-        return {["String"], false}
-      end
-      if receiver =~ /\A'[^']*'\z/
-        return {["Char"], false}
+      if literal = literal_receiver_types(receiver)
+        return {literal, false}
       end
 
       inference = Inference.for(
@@ -535,31 +449,21 @@ module Crystalline::Lightweight
       )
 
       if type_name?(receiver)
-        resolved_name = query.resolve_type_name(receiver, namespace: inference.try(&.current_type_name))
-        if resolved_name
-          # A compiled constant (`LSP::Log = ::Log.for(self)`) is recorded
-          # as a Constant-kind shell whose parent is the value's type: the
-          # constant holds an instance, so its methods are the value type's
-          # instance methods (`LSP::Log.info`).
-          if constant_types = constant_value_types(resolved_name, query)
-            return {constant_types, false}
-          end
-          # The compiled index records constants (`CAST_SEGMENT = "..."`)
-          # as bare type entries with no methods and no parents: a
-          # capitalized receiver resolving to such a shell is a constant
-          # value, not a type — fall through to the constant-type path.
-          return {[resolved_name], true} unless constant_shell_type?(resolved_name, query)
-        end
-        # A capitalized name can also be a constant
-        # (`CAST_SEGMENT = "__lightweight_cast__"`): when it is not a
-        # type, fall back to the recorded constant type.
-        if inference
-          constant_types = inference.types_for(receiver).reject(&.==("Nil")).select { |type_name| receiver_type_known?(type_name, query) }
-          return {constant_types, false} unless constant_types.empty?
-        end
-        return {[] of String, true}
+        return resolve_type_name_receiver(receiver, query, inference)
       end
 
+      if var_receiver = resolve_var_receiver(receiver, query, inference)
+        return var_receiver
+      end
+
+      if local_receiver = resolve_local_or_method_receiver(receiver, query, inference)
+        return local_receiver
+      end
+
+      {[] of String, false}
+    end
+
+    private def resolve_var_receiver(receiver : String, query : Query, inference : Inference?) : {Array(String), Bool}?
       if receiver == "self"
         return inference.try(&.self_types) || {[] of String, false}
       end
@@ -572,16 +476,16 @@ module Crystalline::Lightweight
       end
 
       if class_var_name?(receiver)
-        # A class var holds an instance value (`@@compilation_lock =
-        # Mutex.new`), so its methods are instance methods — unlike a
-        # type-path receiver.
         return {
           (inference ? inference.types_for_class_var(receiver) : [] of String).reject(&.==("Nil")).select { |type_name| receiver_type_known?(type_name, query) },
           false,
         }
       end
+      nil
+    end
 
-      return {[] of String, false} unless local_name?(receiver)
+    private def resolve_local_or_method_receiver(receiver : String, query : Query, inference : Inference?) : {Array(String), Bool}?
+      return nil unless local_name?(receiver)
 
       if inference
         namespace = inference.current_type_name
@@ -597,11 +501,6 @@ module Crystalline::Lightweight
         return {local_types, false} unless local_types.empty?
       end
 
-      # The receiver may be a self-call (e.g. a `getter!` used without an
-      # explicit receiver): resolve the method on the enclosing type. The
-      # return type is resolved against that type's namespace, so a bare
-      # `Workspace` in `Crystalline::Controller` picks the project type even
-      # when another `::Workspace` exists elsewhere.
       if inference
         if self_type_names = inference.self_types[0]?
           return_types = self_type_names.flat_map do |type_name|
@@ -619,6 +518,40 @@ module Crystalline::Lightweight
         }.reject(&.==("Nil")).uniq!,
         false,
       }
+    end
+
+    private def literal_receiver_types(receiver : String) : Array(String)?
+      if receiver == "true" || receiver == "false"
+        return ["Bool"]
+      end
+      if receiver =~ /\A-?\d+_\d+\z/ || receiver =~ /\A-?\d+\z/
+        return ["Int32"]
+      end
+      if receiver =~ /\A-?\d+\.\d+\z/ || receiver =~ /\A-?\d+[eE][+-]?\d+\z/
+        return ["Float64"]
+      end
+      if receiver =~ /\A"[^"]*"\z/
+        return ["String"]
+      end
+      if receiver =~ /\A'[^']*'\z/
+        return ["Char"]
+      end
+      nil
+    end
+
+    private def resolve_type_name_receiver(receiver : String, query : Query, inference : Inference?) : {Array(String), Bool}
+      resolved_name = query.resolve_type_name(receiver, namespace: inference.try(&.current_type_name))
+      if resolved_name
+        if constant_types = constant_value_types(resolved_name, query)
+          return {constant_types, false}
+        end
+        return {[resolved_name], true} unless constant_shell_type?(resolved_name, query)
+      end
+      if inference
+        constant_types = inference.types_for(receiver).reject(&.==("Nil")).select { |type_name| receiver_type_known?(type_name, query) }
+        return {constant_types, false} unless constant_types.empty?
+      end
+      {[] of String, true}
     end
 
     private def safe_chained_call_types(type_names : Array(String), class_method : Bool, method_name : String, query : Query) : {Array(String), Bool}
@@ -708,10 +641,10 @@ module Crystalline::Lightweight
     # (`Array(Arg)` → `Arg`) fail the ambiguous-name tie-break, so fall
     # back to the `Crystal::`-prefixed name when it exists.
     private def resolve_types(types : Array(String), type_name : String, query : Query) : Array(String)
-      types.map do |t|
-        query.resolve_type_name(t, namespace: type_name) ||
-          (query.find_type_info("Crystal::#{t}") ? "Crystal::#{t}" : nil) ||
-          t
+      types.map do |type|
+        query.resolve_type_name(type, namespace: type_name) ||
+          (query.find_type_info("Crystal::#{type}") ? "Crystal::#{type}" : nil) ||
+          type
       end
     end
 
@@ -720,98 +653,117 @@ module Crystalline::Lightweight
       when "not_nil!"
         return TypeUtils.expand_type_names(type_name).reject(&.==("Nil"))
       when "tap", "each", "each_with_index", "select", "reject", "reverse_each"
-        # `reverse_each` chains on the enumerator; the indexed overload is
-        # the block form (`: Nil`), so treat it as identity like `each`.
         return [type_name]
-      when "compact_map"
-        # The indexed overload's return (`Array(U)` with U from the block)
-        # is unresolvable: the chain still flows through an array, so keep
-        # the receiver's array shape.
-        return [type_name] if TypeUtils.array_element_types(type_name)
-      when "flat_map"
-        # `Enumerable#flat_map(& : T -> _)` declares no return restriction
-        # (`Array(U)` is compiler-inferred), so the index records none:
-        # the chain still flows through an array of the block's flattened
-        # results, so approximate with an array of the receiver's elements.
-        if element_types = TypeUtils.enumerable_element_types(type_name)
-          return ["Array(#{resolve_types(element_types, type_name, query).join(" | ")})"]
-        end
-      when "flatten"
-        if TypeUtils.array_element_types(type_name)
-          # `arr.flatten` is still the array.
-          return [type_name]
-        elsif tuple_types = TypeUtils.tuple_element_types(type_name)
-          # `tuple.flatten` becomes an array of the elements' union.
-          return ["Array(#{resolve_types(tuple_types.flatten.uniq!, type_name, query).join(" | ")})"]
-        end
-      when "first", "last", "[]", "find!", "reduce"
-        if element_types = TypeUtils.array_element_types(type_name)
-          return resolve_types(element_types, type_name, query).select { |item| receiver_type_known?(item, query) || query.find_type(item) != nil }
-        elsif tuple_types = TypeUtils.tuple_element_types(type_name)
-          if method_name == "first"
-            return resolve_types(tuple_types.first? || [] of String, type_name, query)
-          elsif method_name == "last"
-            return resolve_types(tuple_types.last? || [] of String, type_name, query)
-          end
-          return resolve_types(tuple_types.flatten.uniq!, type_name, query)
-        elsif value_types = TypeUtils.hash_value_types(type_name)
-          return resolve_types(value_types, type_name, query).select { |item| receiver_type_known?(item, query) || query.find_type(item) != nil }
-        end
-      when "first?", "last?", "[]?", "find", "dig"
-        if element_types = TypeUtils.array_element_types(type_name)
-          return (resolve_types(element_types, type_name, query) + ["Nil"]).uniq
-        elsif tuple_types = TypeUtils.tuple_element_types(type_name)
-          selected = if method_name == "first?"
-                       tuple_types.first? || [] of String
-                     elsif method_name == "last?"
-                       tuple_types.last? || [] of String
-                     else
-                       tuple_types.flatten.uniq!
-                     end
-          return (resolve_types(selected, type_name, query) + ["Nil"]).uniq
-        elsif value_types = TypeUtils.hash_value_types(type_name)
-          return (resolve_types(value_types, type_name, query) + ["Nil"]).uniq
-        elsif value_types = TypeUtils.named_tuple_all_value_types(type_name)
-          return (resolve_types(value_types, type_name, query) + ["Nil"]).uniq
-        end
-      when "fetch"
-        if value_types = TypeUtils.hash_value_types(type_name)
-          return resolve_types(value_types, type_name, query)
-        end
-      else
-        if value_types = TypeUtils.named_tuple_value_types(type_name, method_name)
-          return resolve_types(value_types, type_name, query).select { |item| receiver_type_known?(item, query) || query.find_type(item) != nil }
-        end
       end
 
-      if contracts = query.method_contracts_for(type_name, method_name)
-        contract_types = [] of String
-        contracts.each do |contract|
-          case contract.kind
-          when .preserve_receiver?
-            contract_types.concat(contract.types)
-          when .return_element?, .return_value?
-            contract_types.concat(contract.types)
-          when .return_element_or_nil?, .return_value_or_nil?
-            contract_types.concat(contract.types)
-            contract_types << "Nil"
-          end
-        end
-        contract_types = contract_types.uniq
-        unless contract_types.empty?
-          # A Nil-only contract on a compiler accessor (`Crystal::Type#parents`
-          # returns nil on the base class) is not the real signature: fall
-          # through so chained_call_types applies the semantic one.
-          unless contract_types.all?(&.==("Nil")) && type_name.starts_with?("Crystal::") && TypeUtils.semantic_accessor_return(method_name)
-            # Contracts come from the compiled program, whose return types
-            # are bare (e.g. `ASTNode`): resolve them against the receiver's
-            # namespace before returning.
-            return contract_types.flat_map { |contract_type| return_type_names(contract_type, query, namespace: type_name) }.uniq!
-          end
-        end
+      if element_access = handle_special_return_element_access(type_name, method_name, query)
+        return element_access
+      end
+
+      if enumerable = handle_special_return_enumerable(type_name, method_name, query)
+        return enumerable
+      end
+
+      if value_types = TypeUtils.named_tuple_value_types(type_name, method_name)
+        return resolve_types(value_types, type_name, query).select { |item| receiver_type_known?(item, query) || query.find_type(item) != nil }
+      end
+
+      if contract = handle_special_return_contracts(type_name, method_name, query)
+        return contract
       end
 
       [] of String
+    end
+
+    private def handle_special_return_element_access(type_name : String, method_name : String, query : Query) : Array(String)?
+      if method_name.in?("first", "last", "[]", "find!", "reduce")
+        return handle_special_return_element_access_strict(type_name, method_name, query)
+      elsif method_name.in?("first?", "last?", "[]?", "find", "dig")
+        return handle_special_return_element_access_nilable(type_name, method_name, query)
+      elsif method_name == "fetch"
+        if value_types = TypeUtils.hash_value_types(type_name)
+          return resolve_types(value_types, type_name, query)
+        end
+      end
+      nil
+    end
+
+    private def handle_special_return_element_access_strict(type_name : String, method_name : String, query : Query) : Array(String)?
+      if element_types = TypeUtils.array_element_types(type_name)
+        return resolve_types(element_types, type_name, query).select { |item| receiver_type_known?(item, query) || query.find_type(item) != nil }
+      elsif tuple_types = TypeUtils.tuple_element_types(type_name)
+        if method_name == "first"
+          return resolve_types(tuple_types.first? || [] of String, type_name, query)
+        elsif method_name == "last"
+          return resolve_types(tuple_types.last? || [] of String, type_name, query)
+        end
+        return resolve_types(tuple_types.flatten.uniq!, type_name, query)
+      elsif value_types = TypeUtils.hash_value_types(type_name)
+        return resolve_types(value_types, type_name, query).select { |item| receiver_type_known?(item, query) || query.find_type(item) != nil }
+      end
+      nil
+    end
+
+    private def handle_special_return_element_access_nilable(type_name : String, method_name : String, query : Query) : Array(String)?
+      if element_types = TypeUtils.array_element_types(type_name)
+        return (resolve_types(element_types, type_name, query) + ["Nil"]).uniq
+      elsif tuple_types = TypeUtils.tuple_element_types(type_name)
+        selected = if method_name == "first?"
+                     tuple_types.first? || [] of String
+                   elsif method_name == "last?"
+                     tuple_types.last? || [] of String
+                   else
+                     tuple_types.flatten.uniq!
+                   end
+        return (resolve_types(selected, type_name, query) + ["Nil"]).uniq
+      elsif value_types = TypeUtils.hash_value_types(type_name)
+        return (resolve_types(value_types, type_name, query) + ["Nil"]).uniq
+      elsif value_types = TypeUtils.named_tuple_all_value_types(type_name)
+        return (resolve_types(value_types, type_name, query) + ["Nil"]).uniq
+      end
+      nil
+    end
+
+    private def handle_special_return_enumerable(type_name : String, method_name : String, query : Query) : Array(String)?
+      if method_name == "compact_map"
+        return [type_name] if TypeUtils.array_element_types(type_name)
+      elsif method_name == "flat_map"
+        if element_types = TypeUtils.enumerable_element_types(type_name)
+          return ["Array(#{resolve_types(element_types, type_name, query).join(" | ")})"]
+        end
+      elsif method_name == "flatten"
+        if TypeUtils.array_element_types(type_name)
+          return [type_name]
+        elsif tuple_types = TypeUtils.tuple_element_types(type_name)
+          return ["Array(#{resolve_types(tuple_types.flatten.uniq!, type_name, query).join(" | ")})"]
+        end
+      end
+      nil
+    end
+
+    private def handle_special_return_contracts(type_name : String, method_name : String, query : Query) : Array(String)?
+      contracts = query.method_contracts_for(type_name, method_name)
+      return nil unless contracts
+
+      contract_types = [] of String
+      contracts.each do |contract|
+        case contract.kind
+        when .preserve_receiver?
+          contract_types.concat(contract.types)
+        when .return_element?, .return_value?
+          contract_types.concat(contract.types)
+        when .return_element_or_nil?, .return_value_or_nil?
+          contract_types.concat(contract.types)
+          contract_types << "Nil"
+        end
+      end
+      contract_types = contract_types.uniq
+      unless contract_types.empty?
+        unless contract_types.all?(&.==("Nil")) && type_name.starts_with?("Crystal::") && TypeUtils.semantic_accessor_return(method_name)
+          return contract_types.flat_map { |contract_type| return_type_names(contract_type, query, namespace: type_name) }.uniq!
+        end
+      end
+      nil
     end
 
     private def return_type_names(return_type : String?, query : Query, namespace : String? = nil) : Array(String)

@@ -30,16 +30,8 @@ module Crystalline::Lightweight
       line = @source.lines(chomp: false)[@line_number]?
       return {nil, "no line at cursor"} unless line
 
-      # `require "uri"` — jump to the required file.
-      if require_match = line.match(/\A\s*require\s+["']([^"']+)["']/)
-        string_start = line.index!(require_match[1])
-        string_end = string_start + require_match[1].size
-        if @column_number >= string_start && @column_number <= string_end
-          if locations = locations_for_require(require_match[1])
-            return {locations, "resolved require"}
-          end
-          return {nil, "no lightweight require definition for '#{require_match[1]}'"}
-        end
+      if require_result = try_resolve_require(line)
+        return require_result
       end
 
       span = Resolver.token_span(line, @column_number)
@@ -51,15 +43,43 @@ module Crystalline::Lightweight
       end
 
       token = line[start_index, end_index - start_index]?
-      return {nil, "empty token at cursor"} unless token && !token.empty?
+      return {nil, "empty token at cursor"} if token.nil? || token.empty?
 
+      if method_result = try_resolve_method(line, start_index, token)
+        return method_result
+      end
+
+      if token_result = try_resolve_token(token)
+        return token_result
+      end
+
+      {nil, "unsupported definitions token '#{token}'"}
+    end
+
+    private def try_resolve_require(line : String) : {Array(LSP::Location)?, String}?
+      # `require "uri"` — jump to the required file.
+      if require_match = line.match(/\A\s*require\s+["']([^"']+)["']/)
+        string_start = line.index!(require_match[1])
+        string_end = string_start + require_match[1].size
+        if @column_number >= string_start && @column_number <= string_end
+          if locations = locations_for_require(require_match[1])
+            return {locations, "resolved require"}
+          end
+          return {nil, "no lightweight require definition for '#{require_match[1]}'"}
+        end
+      end
+    end
+
+    private def try_resolve_method(line : String, start_index : Int32, token : String) : {Array(LSP::Location)?, String}?
       if start_index > 0 && line[start_index - 1] == '.'
         receiver = Resolver.receiver_from_line_prefix(@source, @line_number, line[0, start_index - 1])
         return {nil, "missing query for method definitions"} unless query = @query
         definitions = locations_for_method(receiver, token, start_index - 1, query)
         return {definitions, definitions ? "resolved" : "no lightweight method definitions for receiver '#{receiver}' and method '#{token}'"}
       end
+    end
 
+    private def try_resolve_token(token : String) : {Array(LSP::Location)?, String}?
       if Resolver.type_name?(token)
         definitions = locations_for_type(token)
         return {definitions, definitions ? "resolved" : "no lightweight type definition for '#{token}'"}
@@ -71,40 +91,42 @@ module Crystalline::Lightweight
       end
 
       if Resolver.local_name?(token)
-        # A local jumps to its declaration (the enclosing def's argument
-        # or the assignment that defines it), which is what hover types
-        # for the same token.
-        if location = visit_local_declarations(parsed_ast, token, @line_number)
-          end_location = Crystal::Location.new(
-            location.filename,
-            location.line_number,
-            location.column_number + token.size - 1,
-          )
-          return {[lsp_location(location, end_location)], "resolved local"}
-        end
+        return try_resolve_local_or_self_call(token)
+      end
+    end
 
-        # A bare method name may be a self-call: resolve it against the
-        # enclosing type before falling back to top-level methods.
-        if query = @query
-          if inference = Inference.for(@source, @line_number + 1, @column_number + 1, query)
-            if type_names = inference.self_types[0]?
-              unless type_names.empty?
-                method_infos = type_names.flat_map do |type_name|
-                  query.methods_for(type_name, class_method: inference.class_method_context?).select(&.name.==(token))
-                end
-                if locations = build_method_locations(method_infos)
-                  return {locations, "resolved self-call"}
-                end
+    private def try_resolve_local_or_self_call(token : String) : {Array(LSP::Location)?, String}
+      # A local jumps to its declaration (the enclosing def's argument
+      # or the assignment that defines it), which is what hover types
+      # for the same token.
+      if location = visit_local_declarations(parsed_ast, token, @line_number)
+        end_location = Crystal::Location.new(
+          location.filename,
+          location.line_number,
+          location.column_number + token.size - 1,
+        )
+        return {[lsp_location(location, end_location)], "resolved local"}
+      end
+
+      # A bare method name may be a self-call: resolve it against the
+      # enclosing type before falling back to top-level methods.
+      if query = @query
+        if inference = Inference.for(@source, @line_number + 1, @column_number + 1, query)
+          if type_names = inference.self_types[0]?
+            unless type_names.empty?
+              method_infos = type_names.flat_map do |type_name|
+                query.methods_for(type_name, class_method: inference.class_method_context?).select(&.name.==(token))
+              end
+              if locations = build_method_locations(method_infos)
+                return {locations, "resolved self-call"}
               end
             end
           end
         end
-
-        definitions = locations_for_top_level_method(token)
-        return {definitions, definitions ? "resolved" : "no lightweight top-level method definition for '#{token}'"}
       end
 
-      {nil, "unsupported definitions token '#{token}'"}
+      definitions = locations_for_top_level_method(token)
+      {definitions, definitions ? "resolved" : "no lightweight top-level method definition for '#{token}'"}
     end
 
     private def locations_for_method(receiver : String, method_name : String, analysis_column : Int32, query : Query) : Array(LSP::Location)?
@@ -182,7 +204,7 @@ module Crystalline::Lightweight
                        else
                          inference.types_for_instance_var(var_name)
                        end
-          type_names = type_names.reject(&.==("Nil"))
+          type_names = type_names.reject { |name| name == "Nil" }
           if type_names.size == 1
             if locations = locations_for_type(type_names.first)
               return locations
@@ -197,47 +219,61 @@ module Crystalline::Lightweight
     private def visit_ivar_declarations(node : Crystal::ASTNode, var_name : String) : Crystal::Location?
       case node
       when Crystal::Expressions
-        node.expressions.each do |expression|
-          if location = visit_ivar_declarations(expression, var_name)
-            return location
-          end
-        end
+        visit_ivar_in_expressions(node, var_name)
       when Crystal::ClassDef, Crystal::ModuleDef
-        return visit_ivar_declarations(node.body, var_name)
+        visit_ivar_declarations(node.body, var_name)
       when Crystal::Def
-        # The `@server` shorthand in `def initialize(@server : T)` parses as
-        # an arg named "server" plus a leading `@server = server` assignment
-        # in the body; the declaration is the signature argument itself.
-        if var_name.starts_with?('@')
-          body = node.body
-          body_expressions = case body
-                             when Crystal::Expressions then body.expressions
-                             else                           [body]
-                             end
-          body_expressions.each do |expression|
-            next unless expression.is_a?(Crystal::Assign)
-            target = expression.target
-            next unless target.is_a?(Crystal::InstanceVar) && target.name == var_name
-            if arg = node.args.find(&.name.==(var_name.lchop('@')))
-              return arg.location
-            end
-          end
-        end
-        return visit_ivar_declarations(node.body, var_name)
+        visit_ivar_in_def(node, var_name)
       when Crystal::TypeDeclaration
-        case var = node.var
-        when Crystal::InstanceVar, Crystal::ClassVar
-          return node.location if var.name == var_name
-        end
+        visit_ivar_in_type_declaration(node, var_name)
       when Crystal::Assign
-        # An ivar that is never declared (e.g. `@workspace = Workspace.new`)
-        # is defined by its first assignment.
-        case target = node.target
-        when Crystal::InstanceVar, Crystal::ClassVar
-          return target.location if target.name == var_name
+        visit_ivar_in_assign(node, var_name)
+      end
+    end
+
+    private def visit_ivar_in_expressions(node : Crystal::Expressions, var_name : String) : Crystal::Location?
+      node.expressions.each do |expression|
+        if location = visit_ivar_declarations(expression, var_name)
+          return location
         end
       end
       nil
+    end
+
+    private def visit_ivar_in_def(node : Crystal::Def, var_name : String) : Crystal::Location?
+      # The `@server` shorthand in `def initialize(@server : T)` parses as
+      # an arg named "server" plus a leading `@server = server` assignment
+      # in the body; the declaration is the signature argument itself.
+      if var_name.starts_with?('@')
+        body = node.body
+        body_expressions = case body
+                           when Crystal::Expressions then body.expressions
+                           else                           [body]
+                           end
+        body_expressions.each do |expression|
+          next unless expression.is_a?(Crystal::Assign)
+          target = expression.target
+          next unless target.is_a?(Crystal::InstanceVar) && target.name == var_name
+          if arg = node.args.find(&.name.==(var_name.lchop('@')))
+            return arg.location
+          end
+        end
+      end
+      visit_ivar_declarations(node.body, var_name)
+    end
+
+    private def visit_ivar_in_type_declaration(node : Crystal::TypeDeclaration, var_name : String) : Crystal::Location?
+      case var = node.var
+      when Crystal::InstanceVar, Crystal::ClassVar
+        node.location if var.name == var_name
+      end
+    end
+
+    private def visit_ivar_in_assign(node : Crystal::Assign, var_name : String) : Crystal::Location?
+      case target = node.target
+      when Crystal::InstanceVar, Crystal::ClassVar
+        target.location if target.name == var_name
+      end
     end
 
     private def locations_for_top_level_method(method_name : String) : Array(LSP::Location)?
@@ -317,84 +353,106 @@ module Crystalline::Lightweight
 
     private def visit_local_assignments(node : Crystal::ASTNode?, name : String, line : Int32) : Crystal::Location?
       node || return
+      if location = visit_local_assignments_control_flow(node, name, line)
+        return location
+      end
+      visit_local_assignments_vars(node, name, line)
+    end
+
+    private def visit_local_assignments_control_flow(node : Crystal::ASTNode, name : String, line : Int32) : Crystal::Location?
       case node
       when Crystal::Expressions
-        node.expressions.each do |expression|
-          if location = visit_local_assignments(expression, name, line)
-            return location
-          end
-        end
-      when Crystal::If
-        if location = visit_local_assignments(node.then, name, line)
-          return location
-        end
-        visit_local_assignments(node.else, name, line)
-      when Crystal::Unless
-        if location = visit_local_assignments(node.then, name, line)
-          return location
-        end
-        visit_local_assignments(node.else, name, line)
+        visit_local_assignments_in_expressions(node, name, line)
+      when Crystal::If, Crystal::Unless
+        visit_local_assignments(node.then, name, line) || visit_local_assignments(node.else, name, line)
       when Crystal::While, Crystal::Until
         visit_local_assignments(node.body, name, line)
       when Crystal::Case
-        node.whens.each do |when_node|
-          if location = visit_local_assignments(when_node.body, name, line)
-            return location
-          end
-        end
-        visit_local_assignments(node.else, name, line)
+        visit_local_assignments_in_case(node, name, line)
       when Crystal::ExceptionHandler
-        if location = visit_local_assignments(node.body, name, line)
-          return location
-        end
-        if rescues = node.rescues
-          rescues.each do |rescue_node|
-            if location = visit_local_assignments(rescue_node.body, name, line)
-              return location
-            end
-          end
-        end
-        visit_local_assignments(node.else, name, line)
+        visit_local_assignments_in_exception_handler(node, name, line)
       when Crystal::Block
-        # A block parameter is a declaration only when the block contains
-        # the cursor — otherwise the name refers to an outer local.
-        if span_contains_line?(node, line)
-          if arg = node.args.find(&.name.==(name))
-            return arg.location
-          end
-        end
-        visit_local_assignments(node.body, name, line)
+        visit_local_assignments_in_block(node, name, line)
       when Crystal::Call
-        if block = node.block
-          if location = visit_local_assignments(block, name, line)
-            return location
-          end
-        end
-        node.args.each do |arg|
-          if location = visit_local_assignments(arg, name, line)
-            return location
-          end
-        end
-        nil
+        visit_local_assignments_in_call(node, name, line)
+      end
+    end
+
+    private def visit_local_assignments_vars(node : Crystal::ASTNode, name : String, line : Int32) : Crystal::Location?
+      case node
       when Crystal::Assign
-        if target_location = assignment_target_location(node.target, name)
-          return target_location
-        end
-        visit_local_assignments(node.value, name, line)
+        assignment_target_location(node.target, name) || visit_local_assignments(node.value, name, line)
       when Crystal::OpAssign
         assignment_target_location(node.target, name)
       when Crystal::MultiAssign
-        node.targets.each do |target|
-          if target_location = assignment_target_location(target, name)
-            return target_location
-          end
-        end
-        nil
+        visit_local_assignments_in_multi_assign(node, name)
       when Crystal::TypeDeclaration
         assignment_target_location(node.var, name)
-      else
-        nil
       end
+    end
+
+    private def visit_local_assignments_in_expressions(node : Crystal::Expressions, name : String, line : Int32) : Crystal::Location?
+      node.expressions.each do |expression|
+        if location = visit_local_assignments(expression, name, line)
+          return location
+        end
+      end
+      nil
+    end
+
+    private def visit_local_assignments_in_case(node : Crystal::Case, name : String, line : Int32) : Crystal::Location?
+      node.whens.each do |when_node|
+        if location = visit_local_assignments(when_node.body, name, line)
+          return location
+        end
+      end
+      visit_local_assignments(node.else, name, line)
+    end
+
+    private def visit_local_assignments_in_exception_handler(node : Crystal::ExceptionHandler, name : String, line : Int32) : Crystal::Location?
+      if location = visit_local_assignments(node.body, name, line)
+        return location
+      end
+      if rescues = node.rescues
+        rescues.each do |rescue_node|
+          if location = visit_local_assignments(rescue_node.body, name, line)
+            return location
+          end
+        end
+      end
+      visit_local_assignments(node.else, name, line)
+    end
+
+    private def visit_local_assignments_in_block(node : Crystal::Block, name : String, line : Int32) : Crystal::Location?
+      if span_contains_line?(node, line)
+        if arg = node.args.find(&.name.==(name))
+          return arg.location
+        end
+      end
+      visit_local_assignments(node.body, name, line)
+    end
+
+    private def visit_local_assignments_in_call(node : Crystal::Call, name : String, line : Int32) : Crystal::Location?
+      if block = node.block
+        if location = visit_local_assignments(block, name, line)
+          return location
+        end
+      end
+      node.args.each do |arg|
+        if location = visit_local_assignments(arg, name, line)
+          return location
+        end
+      end
+      nil
+    end
+
+    private def visit_local_assignments_in_multi_assign(node : Crystal::MultiAssign, name : String) : Crystal::Location?
+      node.targets.each do |target|
+        if target_location = assignment_target_location(target, name)
+          return target_location
+        end
+      end
+      nil
     end
 
     private def assignment_target_location(target : Crystal::ASTNode, name : String) : Crystal::Location?

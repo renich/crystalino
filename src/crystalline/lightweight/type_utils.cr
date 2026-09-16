@@ -50,28 +50,13 @@ module Crystalline::Lightweight::TypeUtils
 
   def split_top_level(value : String, delimiter : Char) : Array(String)
     parts = [] of String
-    paren_depth = 0
-    brace_depth = 0
-    bracket_depth = 0
+    depths = {paren: 0, brace: 0, bracket: 0}
     start = 0
 
     value.each_char_with_index do |char, index|
-      case char
-      when '('
-        paren_depth += 1
-      when ')'
-        paren_depth -= 1 if paren_depth > 0
-      when '{'
-        brace_depth += 1
-      when '}'
-        brace_depth -= 1 if brace_depth > 0
-      when '['
-        bracket_depth += 1
-      when ']'
-        bracket_depth -= 1 if bracket_depth > 0
-      when delimiter
-        next unless paren_depth == 0 && brace_depth == 0 && bracket_depth == 0
+      depths = update_depths(char, depths)
 
+      if char == delimiter && depths[:paren] == 0 && depths[:brace] == 0 && depths[:bracket] == 0
         parts << value[start...index].strip
         start = index + 1
       end
@@ -79,6 +64,19 @@ module Crystalline::Lightweight::TypeUtils
 
     parts << value[start..].to_s.strip
     parts.reject(&.empty?)
+  end
+
+  private def update_depths(char : Char, depths : NamedTuple(paren: Int32, brace: Int32, bracket: Int32))
+    paren, brace, bracket = depths[:paren], depths[:brace], depths[:bracket]
+    case char
+    when '(' then paren += 1
+    when ')' then paren -= 1 if paren > 0
+    when '{' then brace += 1
+    when '}' then brace -= 1 if brace > 0
+    when '[' then bracket += 1
+    when ']' then bracket -= 1 if bracket > 0
+    end
+    {paren: paren, brace: brace, bracket: bracket}
   end
 
   private def token_start_char?(char : Char) : Bool
@@ -227,39 +225,8 @@ module Crystalline::Lightweight::TypeUtils
     return return_type if return_type.nil? || free_vars.empty?
 
     substitutions = {} of String => String
-    if elements = array_element_types(receiver_type_name)
-      free_vars.each_with_index do |var, index|
-        substitutions[var] = elements[index]? || elements.first? || var
-      end
-    elsif (keys = hash_key_types(receiver_type_name)) && (values = hash_value_types(receiver_type_name))
-      if (key_var = free_vars[0]?) && (key_type = keys.first?)
-        substitutions[key_var] = key_type
-      end
-      if (value_var = free_vars[1]?) && (value_type = values.first?)
-        substitutions[value_var] = value_type
-      end
-    elsif tuples = tuple_element_types(receiver_type_name)
-      free_vars.each_with_index do |var, index|
-        substitutions[var] = tuples[index]?.try(&.join(" | ")) || var
-      end
-    end
-
-    # Class-level vars are not listed in the method's free vars: map any
-    # remaining single-letter var in the return to the receiver's
-    # elements (by order of appearance).
-    element_pool = array_element_types(receiver_type_name) ||
-                   hash_key_types(receiver_type_name) ||
-                   hash_value_types(receiver_type_name) ||
-                   tuple_element_types(receiver_type_name).try(&.flatten)
-    if element_pool && !element_pool.empty?
-      pool_index = 0
-      return_type.scan(/\b([A-Z])\b/) do |match|
-        var = match[1]
-        next if var.nil? || substitutions.has_key?(var)
-        substitutions[var] = element_pool[pool_index % element_pool.size]
-        pool_index += 1
-      end
-    end
+    populate_method_free_vars(substitutions, free_vars, receiver_type_name)
+    populate_class_free_vars(substitutions, return_type, receiver_type_name)
     return return_type if substitutions.empty?
 
     pattern = substitutions.keys.map { |var| Regex.escape(var) }.join("|")
@@ -267,6 +234,50 @@ module Crystalline::Lightweight::TypeUtils
     return return_type if substituted == return_type
 
     deduplicate_substituted_unions(substituted)
+  end
+
+  private def populate_method_free_vars(substitutions : Hash(String, String), free_vars : Array(String), receiver_type_name : String)
+    if elements = array_element_types(receiver_type_name)
+      free_vars.each_with_index do |var, index|
+        substitutions[var] = elements[index]? || elements.first? || var
+      end
+    elsif populate_hash_free_vars(substitutions, free_vars, receiver_type_name)
+      # Handled
+    elsif tuples = tuple_element_types(receiver_type_name)
+      free_vars.each_with_index do |var, index|
+        substitutions[var] = tuples[index]?.try(&.join(" | ")) || var
+      end
+    end
+  end
+
+  private def populate_hash_free_vars(substitutions : Hash(String, String), free_vars : Array(String), receiver_type_name : String) : Bool
+    keys = hash_key_types(receiver_type_name)
+    values = hash_value_types(receiver_type_name)
+    return false unless keys && values
+
+    if (key_var = free_vars[0]?) && (key_type = keys.first?)
+      substitutions[key_var] = key_type
+    end
+    if (value_var = free_vars[1]?) && (value_type = values.first?)
+      substitutions[value_var] = value_type
+    end
+    true
+  end
+
+  private def populate_class_free_vars(substitutions : Hash(String, String), return_type : String, receiver_type_name : String)
+    element_pool = array_element_types(receiver_type_name) ||
+                   hash_key_types(receiver_type_name) ||
+                   hash_value_types(receiver_type_name) ||
+                   tuple_element_types(receiver_type_name).try(&.flatten)
+    return if element_pool.nil? || element_pool.empty?
+
+    pool_index = 0
+    return_type.scan(/\b([A-Z])\b/) do |match|
+      var = match[1]
+      next if var.nil? || substitutions.has_key?(var)
+      substitutions[var] = element_pool[pool_index % element_pool.size]
+      pool_index += 1
+    end
   end
 
   # Substitution can collapse a union (`T | U` both mapping to the same
