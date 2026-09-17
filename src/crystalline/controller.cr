@@ -82,6 +82,8 @@ class Crystalline::Controller
       handle_signature_help_request(message)
     when LSP::DocumentHighlightRequest
       handle_document_highlight_request(message)
+    when LSP::FoldingRangeRequest
+      handle_folding_range_request(message)
     else
       nil
     end
@@ -213,6 +215,14 @@ class Crystalline::Controller
     file_uri = URI.parse message.params.text_document.uri
     @documents_lock.synchronize do
       workspace.document_highlight(@server, file_uri, message.params.position)
+    end
+  end
+
+  private def handle_folding_range_request(message : LSP::FoldingRangeRequest)
+    return nil unless @pending_requests.includes? message.id
+    file_uri = URI.parse message.params.text_document.uri
+    @documents_lock.synchronize do
+      workspace.folding_range(@server, file_uri)
     end
   end
 end

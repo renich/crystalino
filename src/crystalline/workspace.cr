@@ -780,6 +780,17 @@ class Crystalline::Workspace
     Crystalline::Lightweight::DocumentHighlight.highlights(source, position.line, position.character)
   end
 
+  def folding_range(server : LSP::Server, file_uri : URI) : Array(LSP::FoldingRange)?
+    source = if text_document = @opened_documents[file_uri.to_s]?
+               fix_source(text_document.contents)
+             elsif File.exists?(file_uri.decoded_path)
+               File.read(file_uri.decoded_path)
+             end
+    return unless source
+
+    Crystalline::Lightweight::FoldingRange.folding_ranges(source)
+  end
+
   def workspace_symbol(server : LSP::Server, query : String) : Array(LSP::SymbolInformation)
     symbols = [] of LSP::SymbolInformation
     query = query.downcase
