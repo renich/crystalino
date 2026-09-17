@@ -7,6 +7,15 @@ All notable changes to this project will be documented in this file.
 The format is based on `Keep a Changelog <https://keepachangelog.com/en/1.1.0/>`_,
 and this project adheres to `Semantic Versioning <https://semver.org/spec/v2.0.0.html>`_.
 
+[0.19.2] - 2026-09-17
+=====================
+
+Added
+-----
+* LSP Semantic Tokens (``textDocument/semanticTokens/full``): Rich semantic syntax highlighting provider delivering 16 standard token types, 5 token modifiers, relative 5-tuple delta encoding, and robust lexer-based fallback token recovery for broken/unparseable buffers.
+* LSP Lexical Rename (``textDocument/prepareRename`` & ``textDocument/rename``): Scope-bounded identifier renaming provider with pre-flight token validation, keyword/comment rejection, prefix-preserving sigil sanitization, and atomic ``WorkspaceEdit`` generation.
+* Protocol Tests: JSON-RPC wire-level request deserialization and response serialization specifications for Semantic Tokens, Prepare Rename, and Rename.
+
 [0.19.1] - 2026-09-17
 =====================
 

@@ -31,6 +31,11 @@ module Crystalline
     document_highlight_provider: true,
     folding_range_provider: true,
     selection_range_provider: true,
+    semantic_tokens_provider: LSP::SemanticTokensOptions.new(
+      legend: Crystalline::Lightweight::SemanticTokens.legend,
+      full: true,
+    ),
+    rename_provider: LSP::RenameOptions.new(prepare_provider: true),
     signature_help_provider: LSP::SignatureHelpOptions.new(
       trigger_characters: ["(", ","],
       retrigger_characters: [","],
