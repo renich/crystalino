@@ -7,6 +7,28 @@ All notable changes to this project will be documented in this file.
 The format is based on `Keep a Changelog <https://keepachangelog.com/en/1.1.0/>`_,
 and this project adheres to `Semantic Versioning <https://semver.org/spec/v2.0.0.html>`_.
 
+[0.20.0] - 2026-09-17
+=====================
+
+Added
+-----
+* In-Flight Compile Cancellation: Thread-safe ``CancellationToken`` and ``CancellableProgressTracker`` stage interceptor to abort stale background semantic compilation passes immediately upon new document edits, saves, or client cancellations.
+* Token & Folding Cache: Versioned document-level caching for Semantic Tokens (0.44ms mean latency) and Folding Ranges (0.15ms mean latency) with automatic cache invalidation on document buffer mutations.
+* Domain Modules: Extracted ``Crystalino::DefFormatter``, ``Crystalino::Analysis::AstResolver``, and ``Crystalino::Lightweight::CompletionKind`` into domain-bounded packages.
+* Unit Specifications: Unit tests for cancellation tokens, stage interception, and exception propagation (308/308 passing specs).
+
+Changed
+-------
+* Clean-Break Rebranding: Rebranded project, shard, binary, and namespaces to ``crystalino`` (``module Crystalino``, target executable ``crystalino``).
+* Zero Legacy Baggage: Purged all legacy compatibility layers, fallback keys, and deprecated module aliases.
+* Modern Concurrency Runtime: Standardized exclusively on native Crystal 1.21+ ``Fiber::ExecutionContext::Parallel`` and purged legacy ``preview_mt``/single-threaded code branches.
+* Release Optimization: Native release compilation (``--release --no-debug --mcpu=native``) reducing binary footprint to 15MB (68% reduction) with sub-10ms mean interactive latencies.
+
+Removed
+-------
+* Obsolete Dependencies: Dropped external ``priority-queue`` shard in favor of standard library sorted collections (``Array#bsearch_index``), and removed unused ``sentry`` target.
+* Obsolete Patches: Deleted ``src/crystalline/ext/boehm.cr``, ``src/crystalline/ext/fix_random_warning.cr``, and generic ``src/crystalline/utils.cr``.
+
 [0.19.2] - 2026-09-17
 =====================
 
