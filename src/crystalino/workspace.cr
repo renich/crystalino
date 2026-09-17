@@ -24,6 +24,9 @@ class Crystalino::Workspace
   # rebuilding one is cheap and must not happen per request.
   @query_cache = {} of String => {Int32, Crystalino::Lightweight::Query}
   @query_cache_lock = Mutex.new
+  # Active compile cancellation tokens by target URI string.
+  @active_compilations : Hash(String, CancellationToken) = {} of String => CancellationToken
+  @active_compilations_lock = Mutex.new
   # Guards @opened_documents against the background query warm-up, which runs
   # on the compile execution context while the main context mutates the map.
   @documents_mutex = Mutex.new
@@ -70,6 +73,7 @@ class Crystalino::Workspace
     }
 
     @result_cache.invalidate(file_uri)
+    cancel_compilations_for(parsed_uri)
     invalidate_project_caches(parsed_uri, document)
     @query_cache_lock.synchronize { @query_cache.delete(file_uri) }
   end
@@ -79,6 +83,7 @@ class Crystalino::Workspace
     parsed_uri = URI.parse(file_uri)
     document = @documents_mutex.synchronize { @opened_documents.delete(params.text_document.uri) }
     @result_cache.invalidate(file_uri)
+    cancel_compilations_for(parsed_uri)
     # The parsed source index snapshots disk state: a saved or closed file
     # may have changed on disk, so the next query rebuilds it.
     project_for_file(parsed_uri).try(&.source_index = nil)
@@ -94,6 +99,7 @@ class Crystalino::Workspace
 
     document.try &.mark_saved
     @result_cache.invalidate(file_uri)
+    cancel_compilations_for(parsed_uri)
     # The file changed on disk: the parsed source index is stale until it
     # is rebuilt (or the compile replaces it with the semantic index).
     project_for_file(parsed_uri).try(&.source_index = nil)
@@ -177,6 +183,39 @@ class Crystalino::Workspace
     nil
   end
 
+  # Cancels any active or queued compilation for *target_string*.
+  def cancel_compilation(target_string : String) : Nil
+    @active_compilations_lock.synchronize do
+      @active_compilations[target_string]?.try &.cancel
+    end
+  end
+
+  # Cancels compilations associated with *file_uri*.
+  def cancel_compilations_for(file_uri : URI) : Nil
+    project = Project.best_fit_for_file(@projects, file_uri)
+    if project && (entry = project.entry_point?)
+      cancel_compilation(entry.to_s)
+    end
+    cancel_compilation(file_uri.to_s)
+  end
+
+  private def register_cancellation_token(target_string : String) : CancellationToken
+    token = CancellationToken.new
+    @active_compilations_lock.synchronize do
+      @active_compilations[target_string]?.try &.cancel
+      @active_compilations[target_string] = token
+    end
+    token
+  end
+
+  private def cleanup_active_compilation(target_string : String, token : CancellationToken) : Nil
+    @active_compilations_lock.synchronize do
+      if @active_compilations[target_string]? == token
+        @active_compilations.delete(target_string)
+      end
+    end
+  end
+
   # Allow one compilation at a time.
   class_getter compilation_lock = Mutex.new
 
@@ -216,39 +255,81 @@ class Crystalino::Workspace
     hit, cached_result = check_compile_cache(target_string, target, ignore_cached_result, discard_nil_cached_result)
     return cached_result if hit
 
+    cancellation_token = register_cancellation_token(target_string)
+    return nil if cancellation_token.cancelled?
+
     # Wait for pending compilations to finish…
     @@compilation_lock.synchronize do
+      return nil if cancellation_token.cancelled?
+
       # Check again the cache in case some previous compilation that ran while waiting for the mutex to unlock is still valid.
       hit_after, cached_result_after = check_compile_cache(target_string, target, ignore_cached_result, discard_nil_cached_result)
       return cached_result_after if hit_after
+      return nil if cancellation_token.cancelled?
 
-      sync_channel = Channel(Crystal::Compiler::Result?).new(1)
+      execute_compilation(
+        server,
+        target,
+        target_string,
+        project,
+        progress,
+        ignore_diagnostics,
+        wants_doc,
+        top_level,
+        cancellation_token,
+      )
+    end
+  end
 
-      progress.report(server) do
-        # Store the start of the compilation.
-        compilation_start = @result_cache.monotonic_now
+  private def execute_compilation(
+    server : LSP::Server,
+    target : URI,
+    target_string : String,
+    project : Project?,
+    progress : Progress,
+    ignore_diagnostics : Bool,
+    wants_doc : Bool,
+    top_level : Bool,
+    cancellation_token : CancellationToken,
+  ) : Crystal::Compiler::Result?
+    sync_channel = Channel(Crystal::Compiler::Result?).new(1)
 
-        lib_path = project.try(&.default_lib_path)
-        LSP::Log.info { "[compile] analysis start: #{target.decoded_path}" }
-        result = Analysis.compile(server, target, lib_path: lib_path, ignore_diagnostics: ignore_diagnostics, wants_doc: wants_doc, top_level: top_level, compiler_flags: project.try(&.flags) || [] of String)
+    progress.report(server) do
+      # Store the start of the compilation.
+      compilation_start = @result_cache.monotonic_now
+
+      lib_path = project.try(&.default_lib_path)
+      LSP::Log.info { "[compile] analysis start: #{target.decoded_path}" }
+      result = Analysis.compile(
+        server,
+        target,
+        lib_path: lib_path,
+        ignore_diagnostics: ignore_diagnostics,
+        wants_doc: wants_doc,
+        top_level: top_level,
+        compiler_flags: project.try(&.flags) || [] of String,
+        cancellation_token: cancellation_token,
+      )
+
+      unless cancellation_token.cancelled?
         # Store the result in the cache, unless a client event invalided the previous cache.
         # For instance if a compilation is running, but the user saved the document in the meantime (before completion)
         # then we discard the result because it is already outdated.
         @result_cache.set(target_string, result, unless_invalidated_since: compilation_start)
-
         process_compile_result(result, project, target_string, top_level)
-      ensure
-        sync_channel.send(result)
       end
+    ensure
+      cleanup_active_compilation(target_string, cancellation_token)
+      sync_channel.send(result)
+    end
 
-      select
-      when result = sync_channel.receive
-        result
-        # Just in case…
-      when timeout 120.seconds
-        progress.send_progress_end(server)
-        nil
-      end
+    select
+    when result = sync_channel.receive
+      result
+      # Just in case…
+    when timeout 120.seconds
+      progress.send_progress_end(server)
+      nil
     end
   end
 

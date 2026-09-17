@@ -143,6 +143,8 @@ module Crystal
         program.error_stack << e
         # Returns a partially typed ast.
         node
+      rescue e : Crystalino::CompilationCancelledException
+        raise e
       rescue
         # Returns a partially typed ast.
         node

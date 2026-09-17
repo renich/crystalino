@@ -1,4 +1,6 @@
 require "../diagnostics"
+require "../cancellation_token"
+require "./cancellable_progress_tracker"
 require "./cursor_visitor"
 require "./submodule_visitor"
 
@@ -27,19 +29,54 @@ module Crystalino::Analysis
   end
 
   # Compile a target *file_uri*.
-  def self.compile(server : LSP::Server, file_uri : URI, *, lib_path : String? = nil, file_overrides : Hash(String, String)? = nil, ignore_diagnostics = false, wants_doc = false, fail_fast = false, top_level = false, compiler_flags : Array(String) = [] of String) : Crystal::Compiler::Result?
+  def self.compile(
+    server : LSP::Server,
+    file_uri : URI,
+    *,
+    lib_path : String? = nil,
+    file_overrides : Hash(String, String)? = nil,
+    ignore_diagnostics = false,
+    wants_doc = false,
+    fail_fast = false,
+    top_level = false,
+    compiler_flags : Array(String) = [] of String,
+    cancellation_token : CancellationToken? = nil,
+  ) : Crystal::Compiler::Result?
     if file_uri.scheme == "file"
       file = File.new file_uri.decoded_path
       sources = [
         Crystal::Compiler::Source.new(file_uri.decoded_path, file.gets_to_end),
       ]
       file.close
-      self.compile(server, sources, lib_path: lib_path, file_overrides: file_overrides, ignore_diagnostics: ignore_diagnostics, wants_doc: wants_doc, fail_fast: fail_fast, top_level: top_level, compiler_flags: compiler_flags)
+      self.compile(
+        server,
+        sources,
+        lib_path: lib_path,
+        file_overrides: file_overrides,
+        ignore_diagnostics: ignore_diagnostics,
+        wants_doc: wants_doc,
+        fail_fast: fail_fast,
+        top_level: top_level,
+        compiler_flags: compiler_flags,
+        cancellation_token: cancellation_token,
+      )
     end
   end
 
   # Compile an array of *sources*.
-  def self.compile(server : LSP::Server, sources : Array(Crystal::Compiler::Source), *, lib_path : String? = nil, file_overrides : Hash(String, String)? = nil, ignore_diagnostics = false, wants_doc = false, fail_fast = false, top_level = false, compiler_flags : Array(String) = [] of String)
+  def self.compile(
+    server : LSP::Server,
+    sources : Array(Crystal::Compiler::Source),
+    *,
+    lib_path : String? = nil,
+    file_overrides : Hash(String, String)? = nil,
+    ignore_diagnostics = false,
+    wants_doc = false,
+    fail_fast = false,
+    top_level = false,
+    compiler_flags : Array(String) = [] of String,
+    cancellation_token : CancellationToken? = nil,
+  )
     diagnostics = Diagnostics.new
     reply_channel = Channel(Crystal::Compiler::Result | Exception).new
 
@@ -51,6 +88,7 @@ module Crystalino::Analysis
     spawn_dedicated do
       dev_null = File.open(File::NULL, "w")
       compiler = Crystal::Compiler.new
+      compiler.progress_tracker = CancellableProgressTracker.new(cancellation_token)
       compiler.no_codegen = true
       compiler.color = false
       compiler.no_cleanup = true
@@ -93,6 +131,10 @@ module Crystalino::Analysis
     end
 
     result
+  rescue e : CompilationCancelledException
+    LSP::Log.info { "[compile] cancelled: #{e.message}" }
+    ignore_diagnostics = true
+    nil
   rescue e : Exception
     if e.is_a?(Crystal::TypeException) || e.is_a?(Crystal::SyntaxException)
       LSP::Log.debug(exception: e) { "#{e}" }

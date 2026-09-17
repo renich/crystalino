@@ -7,6 +7,7 @@ require "./version"
 # requires.cr first (e.g. a spec) would otherwise compile the extensions
 # against an empty compiler namespace.
 require "./requires"
+require "./cancellation_token"
 require "./ext/*"
 require "./lightweight/*"
 require "./*"
