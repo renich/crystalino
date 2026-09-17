@@ -28,6 +28,7 @@ module Crystalline
     definition_provider: true,
     document_symbol_provider: true,
     workspace_symbol_provider: true,
+    document_highlight_provider: true,
     signature_help_provider: LSP::SignatureHelpOptions.new(
       trigger_characters: ["(", ","],
       retrigger_characters: [","],

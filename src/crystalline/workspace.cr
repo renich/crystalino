@@ -769,6 +769,17 @@ class Crystalline::Workspace
     }
   end
 
+  def document_highlight(server : LSP::Server, file_uri : URI, position : LSP::Position) : Array(LSP::DocumentHighlight)?
+    source = if text_document = @opened_documents[file_uri.to_s]?
+               fix_source(text_document.contents)
+             elsif File.exists?(file_uri.decoded_path)
+               File.read(file_uri.decoded_path)
+             end
+    return unless source
+
+    Crystalline::Lightweight::DocumentHighlight.highlights(source, position.line, position.character)
+  end
+
   def workspace_symbol(server : LSP::Server, query : String) : Array(LSP::SymbolInformation)
     symbols = [] of LSP::SymbolInformation
     query = query.downcase
