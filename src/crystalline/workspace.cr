@@ -802,6 +802,39 @@ class Crystalline::Workspace
     Crystalline::Lightweight::SelectionRange.selection_ranges(source, positions)
   end
 
+  def semantic_tokens(server : LSP::Server, file_uri : URI) : LSP::SemanticTokens?
+    source = if text_document = @opened_documents[file_uri.to_s]?
+               fix_source(text_document.contents)
+             elsif File.exists?(file_uri.decoded_path)
+               File.read(file_uri.decoded_path)
+             end
+    return unless source
+
+    Crystalline::Lightweight::SemanticTokens.tokens(source)
+  end
+
+  def prepare_rename(server : LSP::Server, file_uri : URI, position : LSP::Position) : LSP::PrepareRenameResult?
+    source = if text_document = @opened_documents[file_uri.to_s]?
+               fix_source(text_document.contents)
+             elsif File.exists?(file_uri.decoded_path)
+               File.read(file_uri.decoded_path)
+             end
+    return unless source
+
+    Crystalline::Lightweight::Rename.prepare_rename(source, position.line, position.character)
+  end
+
+  def rename(server : LSP::Server, file_uri : URI, position : LSP::Position, new_name : String) : LSP::WorkspaceEdit?
+    source = if text_document = @opened_documents[file_uri.to_s]?
+               fix_source(text_document.contents)
+             elsif File.exists?(file_uri.decoded_path)
+               File.read(file_uri.decoded_path)
+             end
+    return unless source
+
+    Crystalline::Lightweight::Rename.rename(source, file_uri, position.line, position.character, new_name)
+  end
+
   def workspace_symbol(server : LSP::Server, query : String) : Array(LSP::SymbolInformation)
     symbols = [] of LSP::SymbolInformation
     query = query.downcase

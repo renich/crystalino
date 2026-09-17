@@ -46,7 +46,10 @@ describe "JSON-RPC Wire Protocol" do
       {"textDocument/completion", %({"jsonrpc":"2.0","id":6,"method":"textDocument/completion","params":{"textDocument":{"uri":"file:///a.cr"},"position":{"line":0,"character":0}}}), LSP::CompletionRequest},
       {"textDocument/hover", %({"jsonrpc":"2.0","id":7,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///a.cr"},"position":{"line":0,"character":0}}}), LSP::HoverRequest},
       {"textDocument/definition", %({"jsonrpc":"2.0","id":8,"method":"textDocument/definition","params":{"textDocument":{"uri":"file:///a.cr"},"position":{"line":0,"character":0}}}), LSP::DefinitionRequest},
-      {"unknown/customMethod", %({"jsonrpc":"2.0","id":9,"method":"unknown/customMethod","params":{}}), LSP::UnknownRequest},
+      {"textDocument/semanticTokens/full", %({"jsonrpc":"2.0","id":9,"method":"textDocument/semanticTokens/full","params":{"textDocument":{"uri":"file:///a.cr"}}}), LSP::SemanticTokensRequest},
+      {"textDocument/prepareRename", %({"jsonrpc":"2.0","id":10,"method":"textDocument/prepareRename","params":{"textDocument":{"uri":"file:///a.cr"},"position":{"line":0,"character":0}}}), LSP::PrepareRenameRequest},
+      {"textDocument/rename", %({"jsonrpc":"2.0","id":11,"method":"textDocument/rename","params":{"textDocument":{"uri":"file:///a.cr"},"position":{"line":0,"character":0},"newName":"renamed"}}), LSP::RenameRequest},
+      {"unknown/customMethod", %({"jsonrpc":"2.0","id":12,"method":"unknown/customMethod","params":{}}), LSP::UnknownRequest},
     }
 
     cases.each do |(name, json, expected_type)|
@@ -103,5 +106,28 @@ describe "JSON-RPC Wire Protocol" do
 
     json.should contain(%("parent":))
     json.should contain(%("line":2,"character":4))
+  end
+
+  it "serializes semantic tokens response correctly" do
+    tokens = LSP::SemanticTokens.new(data: [0, 0, 5, 11, 0, 0, 6, 6, 0, 0])
+    response = LSP::ResponseMessage(LSP::SemanticTokens?).new(id: 4, result: tokens)
+    json = response.to_json
+
+    json.should contain(%("data":[0,0,5,11,0,0,6,6,0,0]))
+  end
+
+  it "serializes workspace edit response with text edits correctly" do
+    range = LSP::Range.new(
+      start: LSP::Position.new(line: 0, character: 4),
+      end: LSP::Position.new(line: 0, character: 7)
+    )
+    edit = LSP::TextEdit.new(range: range, new_text: "renamed_var")
+    ws_edit = LSP::WorkspaceEdit.new(changes: {"file:///test.cr" => [edit]})
+    response = LSP::ResponseMessage(LSP::WorkspaceEdit?).new(id: 5, result: ws_edit)
+    json = response.to_json
+
+    json.should contain(%("changes":))
+    json.should contain(%("file:///test.cr":))
+    json.should contain(%("newText":"renamed_var"))
   end
 end
