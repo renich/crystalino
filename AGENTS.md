@@ -31,11 +31,14 @@ Maintain a concurrency-safe project memory using the `ajourn` tool (hardlinked t
 
 ### Formatting & Linting
 - **Formatting**: Always format code using `crystal tool format`.
-- **Linting**: Always run `./bin/ameba` to analyze code.
+- **Linting**: Always run `./bin/ameba` to analyze code. Fix all issues without suppression (`# ameba:disable`).
+- **Complexity**: Keep cyclomatic complexity <= 10 by extracting small, single-purpose helper methods.
+- **Compiler Hygiene**: Use `case ... when` over multi-branch `is_a?` disjunctions on AST hierarchies to prevent Crystal compiler type inference crashes.
+- **Nil Handling**: Never use `.not_nil!` in `src/` or `spec/`. In specs, use the `unwrap!` helper from `spec/support/unwrap.cr`.
 - **Docs**: Prefer RST for documentation (except this `AGENTS.md` file). Ensure `rstcheck` passes on all `.rst` files.
 
 ### Testing
-- Run the test suite via `crystal spec` to verify all examples pass.
+- Run the test suite via `crystal spec` (or per-directory `crystal spec spec/lightweight/` and `spec/*.cr`) to verify all examples pass.
 
 ### Containerization
 - Use `Containerfile` and `.containerignore` instead of Dockerfiles.
