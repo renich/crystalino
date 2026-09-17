@@ -13,6 +13,53 @@ describe Crystalino::CancellationToken do
     token.cancel
     token.cancelled?.should be_true
   end
+
+  it "propagates cancellation concurrently across multiple fibers" do
+    token = Crystalino::CancellationToken.new
+    reader_count = 10
+    observed_channel = Channel(Bool).new
+
+    reader_count.times do
+      spawn do
+        cancelled = false
+        100.times do
+          if token.cancelled?
+            cancelled = true
+            break
+          end
+          Fiber.yield
+        end
+        observed_channel.send(cancelled)
+      end
+    end
+
+    Fiber.yield
+    token.cancel
+
+    results = [] of Bool
+    reader_count.times do
+      results << observed_channel.receive
+    end
+
+    results.all?(&.itself).should be_true
+    token.cancelled?.should be_true
+  end
+
+  it "handles concurrent multi-fiber cancellation safely" do
+    token = Crystalino::CancellationToken.new
+    fiber_count = 8
+    done = Channel(Nil).new
+
+    fiber_count.times do
+      spawn do
+        token.cancel
+        done.send(nil)
+      end
+    end
+
+    fiber_count.times { done.receive }
+    token.cancelled?.should be_true
+  end
 end
 
 describe Crystalino::CompilationCancelledException do

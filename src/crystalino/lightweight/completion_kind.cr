@@ -1,5 +1,5 @@
 require "lsp/server"
-require "compiler/crystal/syntax"
+require "../requires"
 
 module Crystalino::Lightweight
   module CompletionKind
@@ -11,12 +11,16 @@ module Crystalino::Lightweight
         LSP::CompletionItemKind::File
       when Crystal::Const
         LSP::CompletionItemKind::Constant
-      when Crystal::ClassType
-        LSP::CompletionItemKind::Class
       when Crystal::EnumType
         LSP::CompletionItemKind::Enum
       when Crystal::LibType
         LSP::CompletionItemKind::Interface
+      when Crystal::AliasType, Crystal::TypeDefType
+        LSP::CompletionItemKind::Interface
+      when Crystal::PrimitiveType
+        LSP::CompletionItemKind::Struct
+      when Crystal::ClassType
+        kind.struct? ? LSP::CompletionItemKind::Struct : LSP::CompletionItemKind::Class
       when Crystal::ModuleType
         LSP::CompletionItemKind::Module
       else

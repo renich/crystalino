@@ -43,11 +43,12 @@ module Crystalino::Analysis
     cancellation_token : CancellationToken? = nil,
   ) : Crystal::Compiler::Result?
     if file_uri.scheme == "file"
-      file = File.new file_uri.decoded_path
+      path = file_uri.decoded_path
+      return unless File.exists?(path)
+
       sources = [
-        Crystal::Compiler::Source.new(file_uri.decoded_path, file.gets_to_end),
+        Crystal::Compiler::Source.new(path, File.read(path)),
       ]
-      file.close
       self.compile(
         server,
         sources,

@@ -100,4 +100,64 @@ describe Crystalino::TextDocument do
 
     document.dirty?.should be_false
   end
+
+  it "applies multiple pending changes with identical versions in FIFO order" do
+    document = doc("hello world\n")
+
+    # Queue multiple changes for version 3 before version 2 arrives
+    document.update_contents([
+      {"goodbye", LSP::Range.new(
+        start: LSP::Position.new(line: 0, character: 0),
+        end: LSP::Position.new(line: 0, character: 5),
+      )},
+    ], version: 3)
+
+    document.update_contents([
+      {"friend", LSP::Range.new(
+        start: LSP::Position.new(line: 0, character: 8),
+        end: LSP::Position.new(line: 0, character: 13),
+      )},
+    ], version: 3)
+
+    # Now deliver version 2
+    document.update_contents([
+      {"", LSP::Range.new(
+        start: LSP::Position.new(line: 0, character: 5),
+        end: LSP::Position.new(line: 0, character: 5),
+      )},
+    ], version: 2)
+
+    document.contents.should eq("goodbye friend\n")
+    document.version.should eq(3)
+  end
+
+  it "handles out-of-bounds column ranges without duplicating lines" do
+    document = doc("abc\n")
+
+    # Range with character offset beyond line length
+    document.update_contents([
+      {"def", LSP::Range.new(
+        start: LSP::Position.new(line: 0, character: 3),
+        end: LSP::Position.new(line: 0, character: 999),
+      )},
+    ], version: 1)
+
+    document.contents.should eq("abcdef")
+  end
+
+  it "invalidates cached semantic tokens and folding ranges on edit" do
+    document = doc("def foo\n  42\nend\n")
+    document.cached_semantic_tokens = LSP::SemanticTokens.new(data: [1, 2, 3, 4, 5])
+    document.cached_folding_ranges = [LSP::FoldingRange.new(start_line: 0, end_line: 2)]
+
+    document.cached_semantic_tokens.should_not be_nil
+    document.cached_folding_ranges.should_not be_nil
+
+    document.update_contents([
+      {"def bar\n  42\nend\n", nil},
+    ], version: 1)
+
+    document.cached_semantic_tokens.should be_nil
+    document.cached_folding_ranges.should be_nil
+  end
 end

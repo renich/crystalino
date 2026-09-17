@@ -2,7 +2,7 @@ module Crystalino
   # Thread-safe cancellation token used to abort long-running
   # compiler passes when superseded by newer edits or requests.
   class CancellationToken
-    getter? cancelled : Atomic(Bool)
+    @cancelled : Atomic(Bool)
 
     def initialize
       @cancelled = Atomic(Bool).new(false)

@@ -1,4 +1,7 @@
 require "uri"
+require "lsp/server"
+require "./ext/semantic_tokens"
+require "./ext/folding_range"
 require "./project"
 
 class Crystalino::TextDocument
@@ -66,7 +69,7 @@ class Crystalino::TextDocument
     # Check for pending changes
     loop do
       first = @pending_changes.first?
-      break unless first && first.version == self.version + 1
+      break unless first && (first.version == self.version || first.version == self.version + 1)
 
       item = @pending_changes.shift
       partial_update(item.text, item.range, version: item.version)
@@ -99,7 +102,7 @@ class Crystalino::TextDocument
   end
 
   private def insert_pending_change(change : PendingChange)
-    idx = @pending_changes.bsearch_index { |item| item.version >= change.version }
+    idx = @pending_changes.bsearch_index { |item| item.version > change.version }
     if idx
       @pending_changes.insert(idx, change)
     else
@@ -113,8 +116,14 @@ class Crystalino::TextDocument
   end
 
   private def partial_update(contents : String, range : LSP::Range, version : Int32? = nil)
-    prefix = @inner_contents[range.start.line]?.try &.[...range.start.character] || ""
-    suffix = @inner_contents[range.end.line]?.try &.[range.end.character..]? || @inner_contents[range.end.line]? || ""
+    prefix = @inner_contents[range.start.line]?.try { |line|
+      col = Math.min(range.start.character, line.size)
+      line[...col]?
+    } || ""
+    suffix = @inner_contents[range.end.line]?.try { |line|
+      col = Math.min(range.end.character, line.size)
+      line[col..]?
+    } || ""
     replacement_lines = String.build { |str|
       str << prefix << contents << suffix
     }.lines(chomp: false)

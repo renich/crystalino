@@ -9,6 +9,8 @@ require "./version"
 require "./requires"
 require "./cancellation_token"
 require "./ext/*"
+require "./formatter/*"
+require "./analysis/*"
 require "./lightweight/*"
 require "./*"
 

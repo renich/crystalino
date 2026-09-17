@@ -13,7 +13,6 @@ module Crystalino
         end
 
         str << d.name
-        str << ' '
 
         if d.args.size > 0 || d.block_arg || d.double_splat
           format_def_args(str, d)
@@ -46,9 +45,10 @@ module Crystalino
         str << double_splat
         printed_arg = true
       end
-      if d.block_arg
+      if block_arg = d.block_arg
         str << ", " if printed_arg
         str << '&'
+        str << block_arg
         printed_arg = true
       end
       str << ')'

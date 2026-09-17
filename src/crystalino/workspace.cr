@@ -8,6 +8,7 @@ require "./lightweight/completion"
 require "./lightweight/hover"
 require "./lightweight/definitions"
 require "./lightweight/signature_help"
+require "./formatter/def_formatter"
 require "./analysis/*"
 
 class Crystalino::Workspace
@@ -17,6 +18,7 @@ class Crystalino::Workspace
   # The cache survives document edits (only the compile-result dedup cache is invalidated);
   # semantic_cache_allowed? refuses to serve files that changed on disk after the compile.
   @semantic_cache : Hash(String, Crystal::Compiler::Result) = {} of String => Crystal::Compiler::Result
+  @semantic_cache_mutex = Mutex.new
   # On-disk modification time of every source file at the last successful compile.
   @compiled_source_mtimes : Hash(String, Time) = {} of String => Time
   # Lightweight queries per open document, keyed by (uri, version). Each one
@@ -36,6 +38,27 @@ class Crystalino::Workspace
   getter opened_documents = {} of String => TextDocument
   # A list of projects in this workspace
   getter projects = [] of Project
+
+  # Safely look up an opened document by URI string or URI object.
+  def document_for(file_uri : URI | String) : TextDocument?
+    key = file_uri.to_s
+    @documents_mutex.synchronize { @opened_documents[key]? }
+  end
+
+  # Safely look up the semantic compiler result for a file's project entry point.
+  private def semantic_cache_for(file_uri : URI) : Crystal::Compiler::Result?
+    key = semantic_cache_key(file_uri)
+    @semantic_cache_mutex.synchronize { @semantic_cache[key]? }
+  end
+
+  # Safely retrieve the source content for an open buffer or on-disk file.
+  private def document_source(file_uri : URI) : String?
+    if text_document = document_for(file_uri)
+      fix_source(text_document.contents)
+    elsif file_uri.scheme == "file" && File.exists?(file_uri.decoded_path)
+      File.read(file_uri.decoded_path)
+    end
+  end
 
   def initialize(server : LSP::Server, root_uri : String?)
     if parsed_uri = root_uri.try &->URI.parse(String)
@@ -63,7 +86,7 @@ class Crystalino::Workspace
   def update_document(server : LSP::Server, params : LSP::DidChangeTextDocumentParams)
     file_uri = params.text_document.uri
     parsed_uri = URI.parse(file_uri)
-    document = @opened_documents[file_uri]?
+    document = document_for(file_uri)
 
     document.try { |opened_document|
       content_changes = params.content_changes.map { |change|
@@ -95,7 +118,7 @@ class Crystalino::Workspace
   def save_document(server : LSP::Server, params : LSP::DidSaveTextDocumentParams)
     file_uri = params.text_document.uri
     parsed_uri = URI.parse(file_uri)
-    document = @opened_documents[file_uri]?
+    document = document_for(file_uri)
 
     document.try &.mark_saved
     @result_cache.invalidate(file_uri)
@@ -104,10 +127,11 @@ class Crystalino::Workspace
     # is rebuilt (or the compile replaces it with the semantic index).
     project_for_file(parsed_uri).try(&.source_index = nil)
     invalidate_project_caches(parsed_uri, document)
+    @query_cache_lock.synchronize { @query_cache.delete(file_uri) }
   end
 
   def format_document(params : LSP::DocumentFormattingParams) : {String, TextDocument}?
-    @opened_documents[params.text_document.uri]?.try { |document|
+    document_for(params.text_document.uri).try { |document|
       contents = document.contents
       return if contents.blank?
       formatted = Crystal.format(contents)
@@ -127,7 +151,7 @@ class Crystalino::Workspace
   end
 
   def format_document(params : LSP::DocumentRangeFormattingParams) : {String, TextDocument}?
-    @opened_documents[params.text_document.uri]?.try { |document|
+    document_for(params.text_document.uri).try { |document|
       range = params.range
       contents_lines = document.contents.lines(chomp: false)[range.start.line..range.end.line]?
       return if contents_lines.nil? || contents_lines.empty?
@@ -256,28 +280,32 @@ class Crystalino::Workspace
     return cached_result if hit
 
     cancellation_token = register_cancellation_token(target_string)
-    return nil if cancellation_token.cancelled?
-
-    # Wait for pending compilations to finish…
-    @@compilation_lock.synchronize do
+    begin
       return nil if cancellation_token.cancelled?
 
-      # Check again the cache in case some previous compilation that ran while waiting for the mutex to unlock is still valid.
-      hit_after, cached_result_after = check_compile_cache(target_string, target, ignore_cached_result, discard_nil_cached_result)
-      return cached_result_after if hit_after
-      return nil if cancellation_token.cancelled?
+      # Wait for pending compilations to finish…
+      @@compilation_lock.synchronize do
+        return nil if cancellation_token.cancelled?
 
-      execute_compilation(
-        server,
-        target,
-        target_string,
-        project,
-        progress,
-        ignore_diagnostics,
-        wants_doc,
-        top_level,
-        cancellation_token,
-      )
+        # Check again the cache in case some previous compilation that ran while waiting for the mutex to unlock is still valid.
+        hit_after, cached_result_after = check_compile_cache(target_string, target, ignore_cached_result, discard_nil_cached_result)
+        return cached_result_after if hit_after
+        return nil if cancellation_token.cancelled?
+
+        execute_compilation(
+          server,
+          target,
+          target_string,
+          project,
+          progress,
+          ignore_diagnostics,
+          wants_doc,
+          top_level,
+          cancellation_token,
+        )
+      end
+    ensure
+      cleanup_active_compilation(target_string, cancellation_token)
     end
   end
 
@@ -316,10 +344,9 @@ class Crystalino::Workspace
         # For instance if a compilation is running, but the user saved the document in the meantime (before completion)
         # then we discard the result because it is already outdated.
         @result_cache.set(target_string, result, unless_invalidated_since: compilation_start)
-        process_compile_result(result, project, target_string, top_level)
+        process_compile_result(result, project, target_string, top_level, target)
       end
     ensure
-      cleanup_active_compilation(target_string, cancellation_token)
       sync_channel.send(result)
     end
 
@@ -328,6 +355,8 @@ class Crystalino::Workspace
       result
       # Just in case…
     when timeout 120.seconds
+      cancellation_token.cancel
+      LSP::Log.warn { "[compile] timed out after 120s: #{target.decoded_path}" }
       progress.send_progress_end(server)
       nil
     end
@@ -364,7 +393,7 @@ class Crystalino::Workspace
     end
   end
 
-  private def process_compile_result(result, project, target_string, top_level)
+  private def process_compile_result(result, project, target_string, top_level, target : URI? = nil)
     if result && !top_level && !@result_cache.invalidated?(target_string)
       summary, index = Analysis.run_dedicated do
         {
@@ -374,8 +403,10 @@ class Crystalino::Workspace
       end
 
       unless @result_cache.invalidated?(target_string)
-        @semantic_cache[target_string] = result
-        stamp_compiled_sources(result)
+        @semantic_cache_mutex.synchronize do
+          @semantic_cache[target_string] = result
+          stamp_compiled_sources(result, target)
+        end
         project.try &.semantic_summary = summary
         project.try(&.lightweight_index=(index))
         @query_cache_lock.synchronize { @query_cache.clear }
@@ -495,7 +526,7 @@ class Crystalino::Workspace
   end
 
   private def semantic_cache_allowed?(file_uri : URI) : Bool
-    document = @opened_documents[file_uri.to_s]?
+    document = document_for(file_uri)
     return false if document.try(&.dirty?)
 
     # The semantic cache holds the last successful compile. Only serve it
@@ -505,23 +536,27 @@ class Crystalino::Workspace
     return true unless file_uri.scheme == "file"
 
     path = file_uri.decoded_path
-    mtime = @compiled_source_mtimes[path]?
+    mtime = @semantic_cache_mutex.synchronize { @compiled_source_mtimes[path]? }
     return true unless mtime
 
-    File.info(path).modification_time == mtime
+    File.exists?(path) && File.info(path).modification_time == mtime
   rescue File::NotFoundError
     false
   end
 
-  private def stamp_compiled_sources(result : Crystal::Compiler::Result)
+  private def stamp_compiled_sources(result : Crystal::Compiler::Result, target : URI? = nil)
     stamps = {} of String => Time
+    if target && target.scheme == "file"
+      target_path = target.decoded_path
+      stamps[target_path] = File.info(target_path).modification_time if File.exists?(target_path)
+    end
     result.program.requires.each do |filename|
       begin
         stamps[filename] = File.info(filename).modification_time
       rescue File::NotFoundError
       end
     end
-    @compiled_source_mtimes = stamps
+    @compiled_source_mtimes.merge!(stamps)
   end
 
   private def append_markdown_doc(contents : Array(String), doc : String?)
@@ -546,7 +581,7 @@ class Crystalino::Workspace
   end
 
   def hover(server : LSP::Server, file_uri : URI, position : LSP::Position)
-    if text_document = @opened_documents[file_uri.to_s]?
+    if text_document = document_for(file_uri)
       source = fix_source(text_document.contents)
       if query = lightweight_query_for(text_document)
         hover, reason = Crystalino::Lightweight::Hover.hover_and_reason(source, position.line, position.character, query)
@@ -566,7 +601,7 @@ class Crystalino::Workspace
       return
     end
 
-    result = @semantic_cache[semantic_cache_key(file_uri)]?
+    result = semantic_cache_for(file_uri)
     unless result
       LSP::Log.info { "[hover] bail without compile: #{file_uri.decoded_path}:#{position.line}:#{position.character}" }
       return
@@ -595,7 +630,7 @@ class Crystalino::Workspace
   end
 
   def signature_help(server : LSP::Server, file_uri : URI, position : LSP::Position) : LSP::SignatureHelp?
-    if text_document = @opened_documents[file_uri.to_s]?
+    if text_document = document_for(file_uri)
       if query = lightweight_query_for(text_document)
         sig_help = Crystalino::Lightweight::SignatureHelp.signature_help(text_document.contents, position.line, position.character, query)
         if sig_help
@@ -675,7 +710,7 @@ class Crystalino::Workspace
   end
 
   def definitions(server : LSP::Server, file_uri : URI, position : LSP::Position)
-    if text_document = @opened_documents[file_uri.to_s]?
+    if text_document = document_for(file_uri)
       source = fix_source(text_document.contents)
       query = lightweight_query_for(text_document)
       locations, reason = Crystalino::Lightweight::Definitions.definitions_and_reason(source, file_uri, position.line, position.character, query)
@@ -692,7 +727,7 @@ class Crystalino::Workspace
       return
     end
 
-    result = @semantic_cache[semantic_cache_key(file_uri)]?
+    result = semantic_cache_for(file_uri)
     unless result
       LSP::Log.info { "[definitions] bail without compile: #{file_uri.decoded_path}:#{position.line}:#{position.character}" }
       return
@@ -752,7 +787,7 @@ class Crystalino::Workspace
   end
 
   def completion(server : LSP::Server, file_uri : URI, position : LSP::Position, trigger_character : String?) : LSP::CompletionList?
-    text_document = @opened_documents[file_uri.to_s]?
+    text_document = document_for(file_uri)
     return unless text_document
 
     document_lines = fix_source(text_document.contents).lines(chomp: false)
@@ -764,36 +799,36 @@ class Crystalino::Workspace
     if query = lightweight_query_for(text_document)
       completion_items, reason = Crystalino::Lightweight::Completion.complete_and_reason(document_lines.join, position.line, completion_context, query)
       if completion_items
-        # A resolved completion may legitimately be empty (e.g. no ivars
-        # match a fragment): only a miss (nil) falls through to the
-        # compiled fallback.
         LSP::Log.info { "[completion] lightweight hit: #{file_uri.decoded_path}:#{position.line}:#{position.character} items=#{completion_items.size}" }
         return build_completion_list(completion_items)
       end
 
       LSP::Log.info { "[completion] lightweight miss: #{file_uri.decoded_path}:#{position.line}:#{position.character} reason=#{reason}" }
-    else
-      LSP::Log.info { "[completion] lightweight miss: #{file_uri.decoded_path}:#{position.line}:#{position.character} reason=no lightweight query" }
     end
 
-    location = Crystal::Location.new(
-      file_uri.decoded_path,
-      line_number: position.line + 1,
-      column_number: completion_context.analysis_column,
-    )
-
+    # Return the lightweight items if the semantic fallback cannot run.
+    # If the file has uncommitted changes in the editor, serving the semantic
+    # cache would use the on-disk AST with the user's current cursor, which
+    # answers garbage. Bail early so the client can fall back to the
+    # lightweight completion it already received.
     unless semantic_cache_allowed?(file_uri)
       LSP::Log.info { "[completion] bail on dirty buffer: #{file_uri.decoded_path}:#{position.line}:#{position.character}" }
       return
     end
 
-    result = @semantic_cache[semantic_cache_key(file_uri)]?
+    result = semantic_cache_for(file_uri)
     unless result
       LSP::Log.info { "[completion] bail without compile: #{file_uri.decoded_path}:#{position.line}:#{position.character}" }
       return
     end
 
     LSP::Log.info { "[completion] semantic cache hit: #{file_uri.decoded_path}:#{position.line}:#{position.character}" }
+
+    location = Crystal::Location.new(
+      file_uri.decoded_path,
+      line_number: position.line + 1,
+      column_number: completion_context.analysis_column,
+    )
 
     nodes, _ = Analysis.nodes_at_cursor(result, location)
     nodes.last?.try do |node|
@@ -839,7 +874,7 @@ class Crystalino::Workspace
   end
 
   def document_symbols(server : LSP::Server, file_uri : URI)
-    @opened_documents[file_uri.to_s]?.try { |text_document|
+    document_for(file_uri).try { |text_document|
       parser = Crystal::Parser.new(fix_source(text_document.contents))
       parser.filename = file_uri.decoded_path
       parser.wants_doc = false
@@ -851,18 +886,13 @@ class Crystalino::Workspace
   end
 
   def document_highlight(server : LSP::Server, file_uri : URI, position : LSP::Position) : Array(LSP::DocumentHighlight)?
-    source = if text_document = @opened_documents[file_uri.to_s]?
-               fix_source(text_document.contents)
-             elsif File.exists?(file_uri.decoded_path)
-               File.read(file_uri.decoded_path)
-             end
-    return unless source
+    return unless source = document_source(file_uri)
 
     Crystalino::Lightweight::DocumentHighlight.highlights(source, position.line, position.character)
   end
 
   def folding_range(server : LSP::Server, file_uri : URI) : Array(LSP::FoldingRange)?
-    if text_document = @opened_documents[file_uri.to_s]?
+    if text_document = document_for(file_uri)
       if cached = text_document.cached_folding_ranges
         return cached
       end
@@ -871,25 +901,19 @@ class Crystalino::Workspace
       ranges = Crystalino::Lightweight::FoldingRange.folding_ranges(source)
       text_document.cached_folding_ranges = ranges
       ranges
-    elsif File.exists?(file_uri.decoded_path)
-      source = File.read(file_uri.decoded_path)
+    elsif source = document_source(file_uri)
       Crystalino::Lightweight::FoldingRange.folding_ranges(source)
     end
   end
 
   def selection_range(server : LSP::Server, file_uri : URI, positions : Array(LSP::Position)) : Array(LSP::SelectionRange)?
-    source = if text_document = @opened_documents[file_uri.to_s]?
-               fix_source(text_document.contents)
-             elsif File.exists?(file_uri.decoded_path)
-               File.read(file_uri.decoded_path)
-             end
-    return unless source
+    return unless source = document_source(file_uri)
 
     Crystalino::Lightweight::SelectionRange.selection_ranges(source, positions)
   end
 
   def semantic_tokens(server : LSP::Server, file_uri : URI) : LSP::SemanticTokens?
-    if text_document = @opened_documents[file_uri.to_s]?
+    if text_document = document_for(file_uri)
       if cached = text_document.cached_semantic_tokens
         return cached
       end
@@ -898,30 +922,19 @@ class Crystalino::Workspace
       tokens = Crystalino::Lightweight::SemanticTokens.tokens(source)
       text_document.cached_semantic_tokens = tokens
       tokens
-    elsif File.exists?(file_uri.decoded_path)
-      source = File.read(file_uri.decoded_path)
+    elsif source = document_source(file_uri)
       Crystalino::Lightweight::SemanticTokens.tokens(source)
     end
   end
 
   def prepare_rename(server : LSP::Server, file_uri : URI, position : LSP::Position) : LSP::PrepareRenameResult?
-    source = if text_document = @opened_documents[file_uri.to_s]?
-               fix_source(text_document.contents)
-             elsif File.exists?(file_uri.decoded_path)
-               File.read(file_uri.decoded_path)
-             end
-    return unless source
+    return unless source = document_source(file_uri)
 
     Crystalino::Lightweight::Rename.prepare_rename(source, position.line, position.character)
   end
 
   def rename(server : LSP::Server, file_uri : URI, position : LSP::Position, new_name : String) : LSP::WorkspaceEdit?
-    source = if text_document = @opened_documents[file_uri.to_s]?
-               fix_source(text_document.contents)
-             elsif File.exists?(file_uri.decoded_path)
-               File.read(file_uri.decoded_path)
-             end
-    return unless source
+    return unless source = document_source(file_uri)
 
     Crystalino::Lightweight::Rename.rename(source, file_uri, position.line, position.character, new_name)
   end

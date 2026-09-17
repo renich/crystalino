@@ -2,6 +2,7 @@ require "uuid"
 
 class Crystalino::Progress
   @@token_id = Atomic(Int64).new(0)
+  @@request_id = Atomic(Int32).new(1000)
 
   def initialize(token : String, @title : String, @message : String? = nil)
     @token = "#{token}/#{@@token_id.add(1)}"
@@ -10,7 +11,7 @@ class Crystalino::Progress
   def report(server, *, async = false, &cb : Proc(String?))
     if server.client_capabilities.window.try &.work_done_progress
       create_request = LSP::WorkDoneProgressCreateRequest.new(
-        id: 0,
+        id: @@request_id.add(1),
         params: LSP::WorkDoneProgressCreateParams.new(
           token: @token,
         ),
