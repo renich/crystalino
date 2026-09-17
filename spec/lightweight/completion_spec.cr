@@ -1,3 +1,4 @@
+require "../support/unwrap"
 require "spec"
 require "../../src/crystalline/requires"
 require "../../src/crystalline/main"
@@ -71,14 +72,14 @@ describe Crystalline::Lightweight::Completion do
     items = Crystalline::Lightweight::Completion.complete(
       source,
       line_number,
-      context.not_nil!,
+      context.unwrap!,
       query,
     )
 
     items.should_not be_nil
-    items = items.not_nil!
-    items.map(&.insert_text).compact.should contain("greet")
-    items.map(&.insert_text).compact.should contain("shout")
+    items = items.unwrap!
+    items.compact_map(&.insert_text).should contain("greet")
+    items.compact_map(&.insert_text).should contain("shout")
   end
 
   it "completes through a record getter whose return type is a bare name" do
@@ -114,14 +115,14 @@ describe Crystalline::Lightweight::Completion do
     items = Crystalline::Lightweight::Completion.complete(
       source,
       line_number,
-      context.not_nil!,
+      context.unwrap!,
       query,
     )
 
     items.should_not be_nil
-    items = items.not_nil!
-    items.map(&.insert_text).compact.should contain("accept")
-    items.map(&.insert_text).compact.should contain("at")
+    items = items.unwrap!
+    items.compact_map(&.insert_text).should contain("accept")
+    items.compact_map(&.insert_text).should contain("at")
   end
 
   it "completes bare identifiers with the current type's methods" do
@@ -155,13 +156,13 @@ describe Crystalline::Lightweight::Completion do
     items = Crystalline::Lightweight::Completion.complete(
       source,
       line_number,
-      context.not_nil!,
+      context.unwrap!,
       query,
     )
 
     items.should_not be_nil
-    items = items.not_nil!
-    names = items.map(&.insert_text).compact
+    items = items.unwrap!
+    names = items.compact_map(&.insert_text)
     names.should contain("process_type")
     names.should contain("process_result")
   end
@@ -200,13 +201,13 @@ describe Crystalline::Lightweight::Completion do
     items = Crystalline::Lightweight::Completion.complete(
       source,
       line_number,
-      context.not_nil!,
+      context.unwrap!,
       query,
     )
 
     items.should_not be_nil
-    items = items.not_nil!
-    names = items.map(&.insert_text).compact
+    items = items.unwrap!
+    names = items.compact_map(&.insert_text)
     names.should contain("path")
     names.should contain("to_s")
   end
@@ -237,13 +238,13 @@ describe Crystalline::Lightweight::Completion do
     items = Crystalline::Lightweight::Completion.complete(
       source,
       line_number,
-      context.not_nil!,
+      context.unwrap!,
       query,
     )
 
     items.should_not be_nil
-    items = items.not_nil!
-    names = items.map(&.insert_text).compact
+    items = items.unwrap!
+    names = items.compact_map(&.insert_text)
     names.should contain("new")
     names.should contain("build")
   end
@@ -279,13 +280,13 @@ describe Crystalline::Lightweight::Completion do
     items = Crystalline::Lightweight::Completion.complete(
       source,
       line_number,
-      context.not_nil!,
+      context.unwrap!,
       query,
     )
 
     items.should_not be_nil
-    items = items.not_nil!
-    names = items.map(&.insert_text).compact
+    items = items.unwrap!
+    names = items.compact_map(&.insert_text)
     names.should contain("greet")
     names.should contain("shout")
   end
@@ -313,13 +314,13 @@ describe Crystalline::Lightweight::Completion do
     items = Crystalline::Lightweight::Completion.complete(
       source,
       line_number,
-      context.not_nil!,
+      context.unwrap!,
       query,
     )
 
     items.should_not be_nil
-    items = items.not_nil!
-    items.map(&.insert_text).compact.should contain("build")
+    items = items.unwrap!
+    items.compact_map(&.insert_text).should contain("build")
   end
 
   it "completes chained receivers using explicit return types" do
@@ -352,13 +353,13 @@ describe Crystalline::Lightweight::Completion do
     items = Crystalline::Lightweight::Completion.complete(
       source,
       line_number,
-      context.not_nil!,
+      context.unwrap!,
       query,
     )
 
     items.should_not be_nil
-    items = items.not_nil!
-    items.map(&.insert_text).compact.should contain("shout")
+    items = items.unwrap!
+    items.compact_map(&.insert_text).should contain("shout")
   end
 
   it "completes self and instance variable receivers" do
@@ -395,12 +396,12 @@ describe Crystalline::Lightweight::Completion do
     self_items = Crystalline::Lightweight::Completion.complete(
       source,
       self_line_number,
-      self_context.not_nil!,
+      self_context.unwrap!,
       query,
     )
 
     self_items.should_not be_nil
-    self_items.not_nil!.map(&.insert_text).compact.should contain("hello")
+    self_items.unwrap!.compact_map(&.insert_text).should contain("hello")
 
     ivar_line_number = lines.index!(&.includes?("@greeter.sh"))
     ivar_context = Crystalline::CompletionContext.detect(lines[ivar_line_number], lines[ivar_line_number].size - 1, nil)
@@ -409,12 +410,12 @@ describe Crystalline::Lightweight::Completion do
     ivar_items = Crystalline::Lightweight::Completion.complete(
       source,
       ivar_line_number,
-      ivar_context.not_nil!,
+      ivar_context.unwrap!,
       query,
     )
 
     ivar_items.should_not be_nil
-    ivar_items.not_nil!.map(&.insert_text).compact.should contain("shout")
+    ivar_items.unwrap!.compact_map(&.insert_text).should contain("shout")
   end
 
   it "completes locals, top-level methods, self, instance variables, and types without dot triggers" do
@@ -447,28 +448,28 @@ describe Crystalline::Lightweight::Completion do
 
     local_line_number = lines.index! { |item| item.strip == "loc" }
     local_context = Crystalline::CompletionContext.detect(lines[local_line_number], lines[local_line_number].index!("loc") + 3, nil)
-    local_items = Crystalline::Lightweight::Completion.complete(source, local_line_number, local_context.not_nil!, query).not_nil!
-    local_items.map(&.insert_text).compact.should contain("local_copy")
+    local_items = Crystalline::Lightweight::Completion.complete(source, local_line_number, local_context.unwrap!, query).unwrap!
+    local_items.compact_map(&.insert_text).should contain("local_copy")
 
     method_line_number = lines.index! { |item| item.strip == "top_lev" }
     method_context = Crystalline::CompletionContext.detect(lines[method_line_number], lines[method_line_number].index!("top_lev") + 7, nil)
-    method_items = Crystalline::Lightweight::Completion.complete(source, method_line_number, method_context.not_nil!, query).not_nil!
-    method_items.map(&.insert_text).compact.should contain("top_level_name")
+    method_items = Crystalline::Lightweight::Completion.complete(source, method_line_number, method_context.unwrap!, query).unwrap!
+    method_items.compact_map(&.insert_text).should contain("top_level_name")
 
     self_line_number = lines.index! { |item| item.strip == "sel" }
     self_context = Crystalline::CompletionContext.detect(lines[self_line_number], lines[self_line_number].index!("sel") + 3, nil)
-    self_items = Crystalline::Lightweight::Completion.complete(source, self_line_number, self_context.not_nil!, query).not_nil!
-    self_items.map(&.insert_text).compact.should contain("self")
+    self_items = Crystalline::Lightweight::Completion.complete(source, self_line_number, self_context.unwrap!, query).unwrap!
+    self_items.compact_map(&.insert_text).should contain("self")
 
     ivar_line_number = lines.index! { |item| item.strip == "@gre" }
     ivar_context = Crystalline::CompletionContext.detect(lines[ivar_line_number], lines[ivar_line_number].index!("@gre") + 4, nil)
-    ivar_items = Crystalline::Lightweight::Completion.complete(source, ivar_line_number, ivar_context.not_nil!, query).not_nil!
-    ivar_items.map(&.insert_text).compact.should contain("@greeter")
+    ivar_items = Crystalline::Lightweight::Completion.complete(source, ivar_line_number, ivar_context.unwrap!, query).unwrap!
+    ivar_items.compact_map(&.insert_text).should contain("@greeter")
 
     type_line_number = lines.index! { |item| item.strip == "Gre" }
     type_context = Crystalline::CompletionContext.detect(lines[type_line_number], lines[type_line_number].index!("Gre") + 3, nil)
-    type_items = Crystalline::Lightweight::Completion.complete(source, type_line_number, type_context.not_nil!, query).not_nil!
-    type_items.map(&.insert_text).compact.should contain("Greeter")
+    type_items = Crystalline::Lightweight::Completion.complete(source, type_line_number, type_context.unwrap!, query).unwrap!
+    type_items.compact_map(&.insert_text).should contain("Greeter")
   end
 
   it "completes narrowed receivers inside conditional branches" do
@@ -490,8 +491,8 @@ describe Crystalline::Lightweight::Completion do
     isa_lines = isa_source.lines(chomp: false)
     isa_line_number = isa_lines.index!(&.includes?("candidate.sh"))
     isa_context = Crystalline::CompletionContext.detect(isa_lines[isa_line_number], isa_lines[isa_line_number].size - 1, nil)
-    isa_items = Crystalline::Lightweight::Completion.complete(isa_source, isa_line_number, isa_context.not_nil!, query).not_nil!
-    isa_items.map(&.insert_text).compact.should contain("shout")
+    isa_items = Crystalline::Lightweight::Completion.complete(isa_source, isa_line_number, isa_context.unwrap!, query).unwrap!
+    isa_items.compact_map(&.insert_text).should contain("shout")
 
     truthy_source = <<-CRYSTAL
       class Greeter
@@ -511,8 +512,8 @@ describe Crystalline::Lightweight::Completion do
     truthy_lines = truthy_source.lines(chomp: false)
     truthy_line_number = truthy_lines.index!(&.includes?("candidate.sh"))
     truthy_context = Crystalline::CompletionContext.detect(truthy_lines[truthy_line_number], truthy_lines[truthy_line_number].size - 1, nil)
-    truthy_items = Crystalline::Lightweight::Completion.complete(truthy_source, truthy_line_number, truthy_context.not_nil!, truthy_query).not_nil!
-    truthy_items.map(&.insert_text).compact.should contain("shout")
+    truthy_items = Crystalline::Lightweight::Completion.complete(truthy_source, truthy_line_number, truthy_context.unwrap!, truthy_query).unwrap!
+    truthy_items.compact_map(&.insert_text).should contain("shout")
   end
 
   it "completes receivers inferred from logical or fallbacks" do
@@ -533,8 +534,8 @@ describe Crystalline::Lightweight::Completion do
     lines = source.lines(chomp: false)
     line_number = lines.index!(&.includes?("resolved.sh"))
     context = Crystalline::CompletionContext.detect(lines[line_number], lines[line_number].size - 1, nil)
-    items = Crystalline::Lightweight::Completion.complete(source, line_number, context.not_nil!, query).not_nil!
-    items.map(&.insert_text).compact.should contain("shout")
+    items = Crystalline::Lightweight::Completion.complete(source, line_number, context.unwrap!, query).unwrap!
+    items.compact_map(&.insert_text).should contain("shout")
   end
 
   it "completes common helper and container receivers" do
@@ -557,13 +558,13 @@ describe Crystalline::Lightweight::Completion do
 
     first_line_number = lines.index!(&.includes?("items.first.sh"))
     first_context = Crystalline::CompletionContext.detect(lines[first_line_number], lines[first_line_number].size - 1, nil)
-    first_items = Crystalline::Lightweight::Completion.complete(source, first_line_number, first_context.not_nil!, query).not_nil!
-    first_items.map(&.insert_text).compact.should contain("shout")
+    first_items = Crystalline::Lightweight::Completion.complete(source, first_line_number, first_context.unwrap!, query).unwrap!
+    first_items.compact_map(&.insert_text).should contain("shout")
 
     not_nil_line_number = lines.index!(&.includes?("candidate.not_nil!.sh"))
     not_nil_context = Crystalline::CompletionContext.detect(lines[not_nil_line_number], lines[not_nil_line_number].size - 1, nil)
-    not_nil_items = Crystalline::Lightweight::Completion.complete(source, not_nil_line_number, not_nil_context.not_nil!, query).not_nil!
-    not_nil_items.map(&.insert_text).compact.should contain("shout")
+    not_nil_items = Crystalline::Lightweight::Completion.complete(source, not_nil_line_number, not_nil_context.unwrap!, query).unwrap!
+    not_nil_items.compact_map(&.insert_text).should contain("shout")
   end
 
   it "completes methods in standalone syntax-only files" do
@@ -581,8 +582,8 @@ describe Crystalline::Lightweight::Completion do
     lines = source.lines(chomp: false)
     line_number = lines.index!(&.includes?("Clazz.new.method"))
     context = Crystalline::CompletionContext.detect(lines[line_number], lines[line_number].size - 1, nil)
-    items = Crystalline::Lightweight::Completion.complete(source, line_number, context.not_nil!, query).not_nil!
-    items.map(&.insert_text).compact.should contain("method1")
+    items = Crystalline::Lightweight::Completion.complete(source, line_number, context.unwrap!, query).unwrap!
+    items.compact_map(&.insert_text).should contain("method1")
   end
 
   it "completes block arguments for iterator helpers" do
@@ -611,18 +612,18 @@ describe Crystalline::Lightweight::Completion do
 
     item_line_number = lines.index!(&.includes?("item.sh"))
     item_context = Crystalline::CompletionContext.detect(lines[item_line_number], lines[item_line_number].size - 1, nil)
-    item_items = Crystalline::Lightweight::Completion.complete(source, item_line_number, item_context.not_nil!, query).not_nil!
-    item_items.map(&.insert_text).compact.should contain("shout")
+    item_items = Crystalline::Lightweight::Completion.complete(source, item_line_number, item_context.unwrap!, query).unwrap!
+    item_items.compact_map(&.insert_text).should contain("shout")
 
     index_line_number = lines.index!(&.includes?("index.to_"))
     index_context = Crystalline::CompletionContext.detect(lines[index_line_number], lines[index_line_number].size - 1, nil)
-    index_items = Crystalline::Lightweight::Completion.complete(source, index_line_number, index_context.not_nil!, query).not_nil!
-    index_items.map(&.insert_text).compact.should contain("to_i")
+    index_items = Crystalline::Lightweight::Completion.complete(source, index_line_number, index_context.unwrap!, query).unwrap!
+    index_items.compact_map(&.insert_text).should contain("to_i")
 
     value_line_number = lines.index!(&.includes?("value.sh"))
     value_context = Crystalline::CompletionContext.detect(lines[value_line_number], lines[value_line_number].size - 1, nil)
-    value_items = Crystalline::Lightweight::Completion.complete(source, value_line_number, value_context.not_nil!, query).not_nil!
-    value_items.map(&.insert_text).compact.should contain("shout")
+    value_items = Crystalline::Lightweight::Completion.complete(source, value_line_number, value_context.unwrap!, query).unwrap!
+    value_items.compact_map(&.insert_text).should contain("shout")
   end
 
   it "completes tuple and named tuple derived receivers" do
@@ -647,13 +648,13 @@ describe Crystalline::Lightweight::Completion do
 
     tuple_line_number = lines.index!(&.includes?("pair.first.sh"))
     tuple_context = Crystalline::CompletionContext.detect(lines[tuple_line_number], lines[tuple_line_number].size - 1, nil)
-    tuple_items = Crystalline::Lightweight::Completion.complete(source, tuple_line_number, tuple_context.not_nil!, query).not_nil!
-    tuple_items.map(&.insert_text).compact.should contain("shout")
+    tuple_items = Crystalline::Lightweight::Completion.complete(source, tuple_line_number, tuple_context.unwrap!, query).unwrap!
+    tuple_items.compact_map(&.insert_text).should contain("shout")
 
     named_line_number = lines.index!(&.includes?("named.greeter.sh"))
     named_context = Crystalline::CompletionContext.detect(lines[named_line_number], lines[named_line_number].size - 1, nil)
-    named_items = Crystalline::Lightweight::Completion.complete(source, named_line_number, named_context.not_nil!, query).not_nil!
-    named_items.map(&.insert_text).compact.should contain("shout")
+    named_items = Crystalline::Lightweight::Completion.complete(source, named_line_number, named_context.unwrap!, query).unwrap!
+    named_items.compact_map(&.insert_text).should contain("shout")
   end
 
   it "completes helper methods that preserve or refine collection receiver shapes" do
@@ -676,18 +677,18 @@ describe Crystalline::Lightweight::Completion do
 
     select_line_number = lines.index! { |item| item.includes?("items.select.first?.not_nil!.sh") }
     select_context = Crystalline::CompletionContext.detect(lines[select_line_number], lines[select_line_number].size - 1, nil)
-    select_items = Crystalline::Lightweight::Completion.complete(source, select_line_number, select_context.not_nil!, query).not_nil!
-    select_items.map(&.insert_text).compact.should contain("shout")
+    select_items = Crystalline::Lightweight::Completion.complete(source, select_line_number, select_context.unwrap!, query).unwrap!
+    select_items.compact_map(&.insert_text).should contain("shout")
 
     find_line_number = lines.index!(&.includes?("items.find.not_nil!.sh"))
     find_context = Crystalline::CompletionContext.detect(lines[find_line_number], lines[find_line_number].size - 1, nil)
-    find_items = Crystalline::Lightweight::Completion.complete(source, find_line_number, find_context.not_nil!, query).not_nil!
-    find_items.map(&.insert_text).compact.should contain("shout")
+    find_items = Crystalline::Lightweight::Completion.complete(source, find_line_number, find_context.unwrap!, query).unwrap!
+    find_items.compact_map(&.insert_text).should contain("shout")
 
     try_line_number = lines.index!(&.includes?("candidate.try &.sh"))
     try_context = Crystalline::CompletionContext.detect(lines[try_line_number], lines[try_line_number].size - 1, nil)
-    try_items = Crystalline::Lightweight::Completion.complete(source, try_line_number, try_context.not_nil!, query).not_nil!
-    try_items.map(&.insert_text).compact.should contain("shout")
+    try_items = Crystalline::Lightweight::Completion.complete(source, try_line_number, try_context.unwrap!, query).unwrap!
+    try_items.compact_map(&.insert_text).should contain("shout")
   end
 
   it "completes richer hash and reducer helper flows" do
@@ -755,88 +756,88 @@ describe Crystalline::Lightweight::Completion do
 
     key_line_number = lines.index!(&.includes?("key.up"))
     key_context = Crystalline::CompletionContext.detect(lines[key_line_number], lines[key_line_number].size - 1, nil)
-    key_items = Crystalline::Lightweight::Completion.complete(source, key_line_number, key_context.not_nil!, query).not_nil!
-    key_items.map(&.insert_text).compact.should contain("upcase")
+    key_items = Crystalline::Lightweight::Completion.complete(source, key_line_number, key_context.unwrap!, query).unwrap!
+    key_items.compact_map(&.insert_text).should contain("upcase")
 
     value_line_number = lines.index!(&.includes?("value.sh"))
     value_context = Crystalline::CompletionContext.detect(lines[value_line_number], lines[value_line_number].size - 1, nil)
-    value_items = Crystalline::Lightweight::Completion.complete(source, value_line_number, value_context.not_nil!, query).not_nil!
-    value_items.map(&.insert_text).compact.should contain("shout")
+    value_items = Crystalline::Lightweight::Completion.complete(source, value_line_number, value_context.unwrap!, query).unwrap!
+    value_items.compact_map(&.insert_text).should contain("shout")
 
     memo_line_number = lines.index!(&.includes?("memo.to_"))
     memo_context = Crystalline::CompletionContext.detect(lines[memo_line_number], lines[memo_line_number].size - 1, nil)
-    memo_items = Crystalline::Lightweight::Completion.complete(source, memo_line_number, memo_context.not_nil!, query).not_nil!
-    memo_items.map(&.insert_text).compact.should contain("to_i")
+    memo_items = Crystalline::Lightweight::Completion.complete(source, memo_line_number, memo_context.unwrap!, query).unwrap!
+    memo_items.compact_map(&.insert_text).should contain("to_i")
 
     item_line_number = lines.index!(&.includes?("item.to_"))
     item_context = Crystalline::CompletionContext.detect(lines[item_line_number], lines[item_line_number].size - 1, nil)
-    item_items = Crystalline::Lightweight::Completion.complete(source, item_line_number, item_context.not_nil!, query).not_nil!
-    item_items.map(&.insert_text).compact.should contain("to_i")
+    item_items = Crystalline::Lightweight::Completion.complete(source, item_line_number, item_context.unwrap!, query).unwrap!
+    item_items.compact_map(&.insert_text).should contain("to_i")
 
     each_with_object_item_line_number = lines.index!(&.includes?("collected_item.sh"))
     each_with_object_item_context = Crystalline::CompletionContext.detect(lines[each_with_object_item_line_number], lines[each_with_object_item_line_number].size - 1, nil)
-    each_with_object_item_items = Crystalline::Lightweight::Completion.complete(source, each_with_object_item_line_number, each_with_object_item_context.not_nil!, query).not_nil!
-    each_with_object_item_items.map(&.insert_text).compact.should contain("shout")
+    each_with_object_item_items = Crystalline::Lightweight::Completion.complete(source, each_with_object_item_line_number, each_with_object_item_context.unwrap!, query).unwrap!
+    each_with_object_item_items.compact_map(&.insert_text).should contain("shout")
 
     each_with_object_memo_line_number = lines.index!(&.includes?("collected_memo.fi"))
     each_with_object_memo_context = Crystalline::CompletionContext.detect(lines[each_with_object_memo_line_number], lines[each_with_object_memo_line_number].size - 1, nil)
-    each_with_object_memo_items = Crystalline::Lightweight::Completion.complete(source, each_with_object_memo_line_number, each_with_object_memo_context.not_nil!, query).not_nil!
-    each_with_object_memo_items.map(&.insert_text).compact.should contain("first?")
+    each_with_object_memo_items = Crystalline::Lightweight::Completion.complete(source, each_with_object_memo_line_number, each_with_object_memo_context.unwrap!, query).unwrap!
+    each_with_object_memo_items.compact_map(&.insert_text).should contain("first?")
 
     collected_line_number = lines.index!(&.includes?("collected.first.up"))
     collected_context = Crystalline::CompletionContext.detect(lines[collected_line_number], lines[collected_line_number].size - 1, nil)
-    collected_items = Crystalline::Lightweight::Completion.complete(source, collected_line_number, collected_context.not_nil!, query).not_nil!
-    collected_items.map(&.insert_text).compact.should contain("upcase")
+    collected_items = Crystalline::Lightweight::Completion.complete(source, collected_line_number, collected_context.unwrap!, query).unwrap!
+    collected_items.compact_map(&.insert_text).should contain("upcase")
 
     mapped_line_number = lines.index!(&.includes?("mapped.first.up"))
     mapped_context = Crystalline::CompletionContext.detect(lines[mapped_line_number], lines[mapped_line_number].size - 1, nil)
-    mapped_items = Crystalline::Lightweight::Completion.complete(source, mapped_line_number, mapped_context.not_nil!, query).not_nil!
-    mapped_items.map(&.insert_text).compact.should contain("upcase")
+    mapped_items = Crystalline::Lightweight::Completion.complete(source, mapped_line_number, mapped_context.unwrap!, query).unwrap!
+    mapped_items.compact_map(&.insert_text).should contain("upcase")
 
     flat_mapped_line_number = lines.index!(&.includes?("flat_mapped.first.up"))
     flat_mapped_context = Crystalline::CompletionContext.detect(lines[flat_mapped_line_number], lines[flat_mapped_line_number].size - 1, nil)
-    flat_mapped_items = Crystalline::Lightweight::Completion.complete(source, flat_mapped_line_number, flat_mapped_context.not_nil!, query).not_nil!
-    flat_mapped_items.map(&.insert_text).compact.should contain("upcase")
+    flat_mapped_items = Crystalline::Lightweight::Completion.complete(source, flat_mapped_line_number, flat_mapped_context.unwrap!, query).unwrap!
+    flat_mapped_items.compact_map(&.insert_text).should contain("upcase")
 
     compacted_line_number = lines.index!(&.includes?("compacted.first.up"))
     compacted_context = Crystalline::CompletionContext.detect(lines[compacted_line_number], lines[compacted_line_number].size - 1, nil)
-    compacted_items = Crystalline::Lightweight::Completion.complete(source, compacted_line_number, compacted_context.not_nil!, query).not_nil!
-    compacted_items.map(&.insert_text).compact.should contain("upcase")
+    compacted_items = Crystalline::Lightweight::Completion.complete(source, compacted_line_number, compacted_context.unwrap!, query).unwrap!
+    compacted_items.compact_map(&.insert_text).should contain("upcase")
 
     indexed_line_number = lines.index!(&.includes?("indexed[\"primary\"].sh"))
     indexed_context = Crystalline::CompletionContext.detect(lines[indexed_line_number], lines[indexed_line_number].size - 1, nil)
-    indexed_items = Crystalline::Lightweight::Completion.complete(source, indexed_line_number, indexed_context.not_nil!, query).not_nil!
-    indexed_items.map(&.insert_text).compact.should contain("shout")
+    indexed_items = Crystalline::Lightweight::Completion.complete(source, indexed_line_number, indexed_context.unwrap!, query).unwrap!
+    indexed_items.compact_map(&.insert_text).should contain("shout")
 
     grouped_line_number = lines.index! { |item| item.includes?("grouped[\"primary\"].first.sh") }
     grouped_context = Crystalline::CompletionContext.detect(lines[grouped_line_number], lines[grouped_line_number].size - 1, nil)
-    grouped_items = Crystalline::Lightweight::Completion.complete(source, grouped_line_number, grouped_context.not_nil!, query).not_nil!
-    grouped_items.map(&.insert_text).compact.should contain("shout")
+    grouped_items = Crystalline::Lightweight::Completion.complete(source, grouped_line_number, grouped_context.unwrap!, query).unwrap!
+    grouped_items.compact_map(&.insert_text).should contain("shout")
 
     found_value_line_number = lines.index!(&.includes?("found_value.not_nil!.up"))
     found_value_context = Crystalline::CompletionContext.detect(lines[found_value_line_number], lines[found_value_line_number].size - 1, nil)
-    found_value_items = Crystalline::Lightweight::Completion.complete(source, found_value_line_number, found_value_context.not_nil!, query).not_nil!
-    found_value_items.map(&.insert_text).compact.should contain("upcase")
+    found_value_items = Crystalline::Lightweight::Completion.complete(source, found_value_line_number, found_value_context.unwrap!, query).unwrap!
+    found_value_items.compact_map(&.insert_text).should contain("upcase")
 
     resolved_line_number = lines.index!(&.includes?("resolved.not_nil!.up"))
     resolved_context = Crystalline::CompletionContext.detect(lines[resolved_line_number], lines[resolved_line_number].size - 1, nil)
-    resolved_items = Crystalline::Lightweight::Completion.complete(source, resolved_line_number, resolved_context.not_nil!, query).not_nil!
-    resolved_items.map(&.insert_text).compact.should contain("upcase")
+    resolved_items = Crystalline::Lightweight::Completion.complete(source, resolved_line_number, resolved_context.unwrap!, query).unwrap!
+    resolved_items.compact_map(&.insert_text).should contain("upcase")
 
     dig_line_number = lines.index!(&.includes?("lookup.dig.sh"))
     dig_context = Crystalline::CompletionContext.detect(lines[dig_line_number], lines[dig_line_number].size - 1, nil)
-    dig_items = Crystalline::Lightweight::Completion.complete(source, dig_line_number, dig_context.not_nil!, query).not_nil!
-    dig_items.map(&.insert_text).compact.should contain("shout")
+    dig_items = Crystalline::Lightweight::Completion.complete(source, dig_line_number, dig_context.unwrap!, query).unwrap!
+    dig_items.compact_map(&.insert_text).should contain("shout")
 
     find_bang_line_number = lines.index!(&.includes?("items.find!.sh"))
     find_bang_context = Crystalline::CompletionContext.detect(lines[find_bang_line_number], lines[find_bang_line_number].size - 1, nil)
-    find_bang_items = Crystalline::Lightweight::Completion.complete(source, find_bang_line_number, find_bang_context.not_nil!, query).not_nil!
-    find_bang_items.map(&.insert_text).compact.should contain("shout")
+    find_bang_items = Crystalline::Lightweight::Completion.complete(source, find_bang_line_number, find_bang_context.unwrap!, query).unwrap!
+    find_bang_items.compact_map(&.insert_text).should contain("shout")
 
     inherited_line_number = lines.index!(&.includes?("items.comp"))
     inherited_context = Crystalline::CompletionContext.detect(lines[inherited_line_number], lines[inherited_line_number].size - 1, nil)
-    inherited_items = Crystalline::Lightweight::Completion.complete(source, inherited_line_number, inherited_context.not_nil!, query).not_nil!
-    inherited_items.map(&.insert_text).compact.should contain("compact_map")
+    inherited_items = Crystalline::Lightweight::Completion.complete(source, inherited_line_number, inherited_context.unwrap!, query).unwrap!
+    inherited_items.compact_map(&.insert_text).should contain("compact_map")
   end
 
   it "scopes namespace completion to the receiver's nested types" do
@@ -861,9 +862,9 @@ describe Crystalline::Lightweight::Completion do
     items = Crystalline::Lightweight::Completion.complete(
       source,
       line_number,
-      context.not_nil!,
+      context.unwrap!,
       query,
-    ).not_nil!
+    ).unwrap!
 
     labels = items.map(&.label)
     labels.should contain("Foo::Inner")
@@ -898,13 +899,13 @@ describe Crystalline::Lightweight::Completion do
 
     new_line_number = lines.index! { |item| item.strip == "Greeter.new(\"hi\").sh" }
     new_context = Crystalline::CompletionContext.detect(lines[new_line_number], lines[new_line_number].size - 1, nil)
-    new_items = Crystalline::Lightweight::Completion.complete(source, new_line_number, new_context.not_nil!, query).not_nil!
-    new_items.map(&.insert_text).compact.should contain("shout")
+    new_items = Crystalline::Lightweight::Completion.complete(source, new_line_number, new_context.unwrap!, query).unwrap!
+    new_items.compact_map(&.insert_text).should contain("shout")
 
     build_line_number = lines.index! { |item| item.strip == "factory.build(\"hi\").sh" }
     build_context = Crystalline::CompletionContext.detect(lines[build_line_number], lines[build_line_number].size - 1, nil)
-    build_items = Crystalline::Lightweight::Completion.complete(source, build_line_number, build_context.not_nil!, query).not_nil!
-    build_items.map(&.insert_text).compact.should contain("shout")
+    build_items = Crystalline::Lightweight::Completion.complete(source, build_line_number, build_context.unwrap!, query).unwrap!
+    build_items.compact_map(&.insert_text).should contain("shout")
   end
 
   it "completes accessor macros and top-level locals from source" do
@@ -922,8 +923,8 @@ describe Crystalline::Lightweight::Completion do
 
     accessor_line_number = lines.index! { |item| item.strip == "user.na" }
     accessor_context = Crystalline::CompletionContext.detect(lines[accessor_line_number], lines[accessor_line_number].size - 1, nil)
-    accessor_items = Crystalline::Lightweight::Completion.complete(source, accessor_line_number, accessor_context.not_nil!, query).not_nil!
-    accessor_items.map(&.insert_text).compact.should contain("name")
+    accessor_items = Crystalline::Lightweight::Completion.complete(source, accessor_line_number, accessor_context.unwrap!, query).unwrap!
+    accessor_items.compact_map(&.insert_text).should contain("name")
   end
 
   it "completes ivar receivers from parsed source at the class body" do
@@ -950,9 +951,9 @@ describe Crystalline::Lightweight::Completion do
     context = Crystalline::CompletionContext.detect(fixed_lines[line_number], fixed_lines[line_number].size - 1, nil)
     context.should_not be_nil
 
-    items = Crystalline::Lightweight::Completion.complete(fixed, line_number, context.not_nil!, query)
+    items = Crystalline::Lightweight::Completion.complete(fixed, line_number, context.unwrap!, query)
     items.should_not be_nil
-    items.not_nil!.map(&.insert_text).compact.should contain("ping")
+    items.unwrap!.compact_map(&.insert_text).should contain("ping")
   end
 
   it "completes generic receivers against the secondary index" do
@@ -965,8 +966,8 @@ describe Crystalline::Lightweight::Completion do
     CRYSTAL
 
     fixed = Crystalline::BrokenSourceFixer.fix(source)
-    primary = Crystalline::Lightweight::Index.from_source(fixed).not_nil!
-    secondary = Crystalline::Lightweight::Index.from_source("class Set(T)\n  def add(x : T) : Nil\n  end\nend\n").not_nil!
+    primary = Crystalline::Lightweight::Index.from_source(fixed).unwrap!
+    secondary = Crystalline::Lightweight::Index.from_source("class Set(T)\n  def add(x : T) : Nil\n  end\nend\n").unwrap!
     query = Crystalline::Lightweight::Query.new(primary, secondary: secondary)
 
     line_number = source.lines.index! { |item| item.strip == "@pending." }
@@ -974,9 +975,9 @@ describe Crystalline::Lightweight::Completion do
     context = Crystalline::CompletionContext.detect(fixed_lines[line_number], fixed_lines[line_number].size - 1, nil)
     context.should_not be_nil
 
-    items = Crystalline::Lightweight::Completion.complete(fixed, line_number, context.not_nil!, query)
+    items = Crystalline::Lightweight::Completion.complete(fixed, line_number, context.unwrap!, query)
     items.should_not be_nil
-    items.not_nil!.map(&.insert_text).compact.should contain("add")
+    items.unwrap!.compact_map(&.insert_text).should contain("add")
   end
 
   it "completes methods on a value typed as an alias" do
@@ -1001,9 +1002,9 @@ describe Crystalline::Lightweight::Completion do
     context = Crystalline::CompletionContext.detect(lines[line_number], lines[line_number].size - 1, nil)
     context.should_not be_nil
 
-    items = Crystalline::Lightweight::Completion.complete(source, line_number, context.not_nil!, query)
+    items = Crystalline::Lightweight::Completion.complete(source, line_number, context.unwrap!, query)
     items.should_not be_nil
-    items.not_nil!.map(&.insert_text).compact.should contain("hello")
+    items.unwrap!.compact_map(&.insert_text).should contain("hello")
   end
 
   it "completes ivars from source when the buffer does not parse" do
@@ -1023,9 +1024,9 @@ describe Crystalline::Lightweight::Completion do
     query = build_syntax_query(source.sub(/\n[ \t]*x = "unclosed/, "\n"))
     lines = source.lines(chomp: false)
     line_number = lines.index! { |item| item.strip == "@p" }
-    context = Crystalline::CompletionContext.detect(lines[line_number], lines[line_number].size, "@").not_nil!
-    items = Crystalline::Lightweight::Completion.complete(source, line_number, context, query).not_nil!
-    items.map(&.insert_text).compact.should contain("@pending")
+    context = Crystalline::CompletionContext.detect(lines[line_number], lines[line_number].size, "@").unwrap!
+    items = Crystalline::Lightweight::Completion.complete(source, line_number, context, query).unwrap!
+    items.compact_map(&.insert_text).should contain("@pending")
   end
 
   it "keeps the sigil in ivar completion items" do
@@ -1047,13 +1048,13 @@ describe Crystalline::Lightweight::Completion do
     context = Crystalline::CompletionContext.detect(lines[line_number], lines[line_number].size - 1, nil)
     context.should_not be_nil
 
-    items = Crystalline::Lightweight::Completion.complete(source, line_number, context.not_nil!, query)
+    items = Crystalline::Lightweight::Completion.complete(source, line_number, context.unwrap!, query)
     items.should_not be_nil
-    item = items.not_nil!.find { |i| i.filter_text == "@documents_lock" }
+    item = items.unwrap!.find { |i| i.filter_text == "@documents_lock" }
     item.should_not be_nil
-    item = item.not_nil!
+    item = item.unwrap!
     item.insert_text.should eq("@documents_lock")
-    text_edit = item.text_edit.not_nil!
+    text_edit = item.text_edit.unwrap!
     text_edit.new_text.should eq("@documents_lock")
     replaced = lines[line_number][text_edit.range.start.character...text_edit.range.end.character]
     replaced.should eq("@documents_")
@@ -1078,9 +1079,9 @@ describe Crystalline::Lightweight::Completion do
     context = Crystalline::CompletionContext.detect(lines[line_number], lines[line_number].index!("@") + 1, nil)
     context.should_not be_nil
 
-    items = Crystalline::Lightweight::Completion.complete(fixed, line_number, context.not_nil!, query)
+    items = Crystalline::Lightweight::Completion.complete(fixed, line_number, context.unwrap!, query)
     items.should_not be_nil
-    names = items.not_nil!.map(&.insert_text).compact
+    names = items.unwrap!.compact_map(&.insert_text)
     names.should contain("@documents_mutex")
     names.should contain("@opened_documents")
   end
@@ -1108,9 +1109,9 @@ describe Crystalline::Lightweight::Completion do
     context = Crystalline::CompletionContext.detect(lines[line_number], lines[line_number].size - 1, nil)
     context.should_not be_nil
 
-    items = Crystalline::Lightweight::Completion.complete(fixed, line_number, context.not_nil!, query)
+    items = Crystalline::Lightweight::Completion.complete(fixed, line_number, context.unwrap!, query)
     items.should_not be_nil
-    items.not_nil!.map(&.insert_text).compact.should contain("dirname")
+    items.unwrap!.compact_map(&.insert_text).should contain("dirname")
   end
 
   it "resolves constant receivers and class methods when inferring calls" do
@@ -1145,9 +1146,9 @@ describe Crystalline::Lightweight::Completion do
     context = Crystalline::CompletionContext.detect(lines[line_number], lines[line_number].size - 1, nil)
     context.should_not be_nil
 
-    items = Crystalline::Lightweight::Completion.complete(fixed, line_number, context.not_nil!, query)
+    items = Crystalline::Lightweight::Completion.complete(fixed, line_number, context.unwrap!, query)
     items.should_not be_nil
-    items.not_nil!.map(&.insert_text).compact.should contain("dirname")
+    items.unwrap!.compact_map(&.insert_text).should contain("dirname")
   end
 
   it "keeps overloads with untyped args distinct from no-arg overloads" do
@@ -1180,16 +1181,16 @@ describe Crystalline::Lightweight::Completion do
     items = Crystalline::Lightweight::Completion.complete(
       source,
       line_number,
-      context.not_nil!,
+      context.unwrap!,
       query,
     )
 
     items.should_not be_nil
-    items = items.not_nil!
+    items = items.unwrap!
     foos = items.select { |item| item.insert_text == "foo" }
     foos.size.should eq(2)
-    foos.map(&.detail).compact.sort!.should contain("Overloads#foo() : Int32")
-    foos.map(&.detail).compact.sort!.should contain("Overloads#foo(x) : String")
+    foos.compact_map(&.detail).sort!.should contain("Overloads#foo() : Int32")
+    foos.compact_map(&.detail).sort!.should contain("Overloads#foo(x) : String")
   end
 
   it "completes ivar names after a bare sigil" do
@@ -1215,17 +1216,17 @@ describe Crystalline::Lightweight::Completion do
     context = Crystalline::CompletionContext.detect(line, cursor, "@")
     context.should_not be_nil
     # The analysis prefix ends at the sigil so the fragment stays empty.
-    context.not_nil!.analysis_column.should eq(cursor - 1)
+    context.unwrap!.analysis_column.should eq(cursor - 1)
 
     items = Crystalline::Lightweight::Completion.complete(
       fixed,
       line_number,
-      context.not_nil!,
+      context.unwrap!,
       query,
     )
 
     items.should_not be_nil
-    names = items.not_nil!.map(&.insert_text).compact
+    names = items.unwrap!.compact_map(&.insert_text)
     names.should contain("@server")
     names.should contain("@cache")
   end
@@ -1253,13 +1254,13 @@ describe Crystalline::Lightweight::Completion do
     items = Crystalline::Lightweight::Completion.complete(
       source,
       line_number,
-      context.not_nil!,
+      context.unwrap!,
       query,
     )
 
     items.should_not be_nil
     # The getter's `of` clause names the shape: the receiver resolves to
     # Hash(String, Int32), whose methods complete.
-    items.not_nil!.map(&.insert_text).compact.should contain("has_key?")
+    items.unwrap!.compact_map(&.insert_text).should contain("has_key?")
   end
 end

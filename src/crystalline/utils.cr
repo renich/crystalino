@@ -81,6 +81,29 @@ module Crystalline::Utils
     )
   end
 
+  private def self.format_def_args(str : String::Builder, d : Crystal::Def | Crystal::Macro)
+    str << '('
+    printed_arg = false
+    d.args.each_with_index do |arg, i|
+      str << ", " if printed_arg
+      str << '*' if d.splat_index == i
+      str << arg.to_s
+      printed_arg = true
+    end
+    if double_splat = d.double_splat
+      str << ", " if printed_arg
+      str << "**"
+      str << double_splat
+      printed_arg = true
+    end
+    if d.block_arg
+      str << ", " if printed_arg
+      str << '&'
+      printed_arg = true
+    end
+    str << ')'
+  end
+
   # Format a method definition or macro.
   def self.format_def(d : Crystal::Def | Crystal::Macro, *, short = false)
     String.build { |str|
@@ -93,26 +116,7 @@ module Crystalline::Utils
       str << ' '
 
       if d.args.size > 0 || d.block_arg || d.double_splat
-        str << '('
-        printed_arg = false
-        d.args.each_with_index do |arg, i|
-          str << ", " if printed_arg
-          str << '*' if d.splat_index == i
-          str << arg.to_s
-          printed_arg = true
-        end
-        if double_splat = d.double_splat
-          str << ", " if printed_arg
-          str << "**"
-          str << double_splat
-          printed_arg = true
-        end
-        if d.block_arg
-          str << ", " if printed_arg
-          str << '&'
-          printed_arg = true
-        end
-        str << ')'
+        format_def_args(str, d)
       end
       if d.responds_to?(:return_type) && (return_type = d.return_type)
         str << " : #{return_type}"

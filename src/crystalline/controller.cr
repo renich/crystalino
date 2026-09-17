@@ -26,13 +26,13 @@ class Crystalline::Controller
       # Then run the top-level semantic pass per project: it populates the
       # lightweight project index (including the stdlib) within seconds, so
       # interactive features work before the full compile finishes.
-      workspace.projects.each do |p|
-        workspace.recalculate_dependencies(@server, p)
+      workspace.projects.each do |project|
+        workspace.recalculate_dependencies(@server, project)
       end
 
       # Then compile each project entry point at once.
-      workspace.projects.each do |p|
-        if entry_point = p.entry_point?
+      workspace.projects.each do |project|
+        if entry_point = project.entry_point?
           LSP::Log.info { "[compile] startup: #{entry_point.decoded_path}" }
           workspace.compile(@server, entry_point, wants_doc: true)
         end
@@ -138,5 +138,44 @@ class Crystalline::Controller
     LSP::Log.warn(exception: e) { e.to_s }
   rescue e : Crystal::SyntaxException
     LSP::Log.warn(exception: e) { e.to_s }
+  end
+
+  private def handle_hover_request(message : LSP::HoverRequest)
+    return nil unless @pending_requests.includes? message.id
+    file_uri = URI.parse message.params.text_document.uri
+    workspace.hover(@server, file_uri, message.params.position)
+  end
+
+  private def handle_definition_request(message : LSP::DefinitionRequest)
+    return nil unless @pending_requests.includes? message.id
+    file_uri = URI.parse message.params.text_document.uri
+    workspace.definitions(@server, file_uri, message.params.position)
+  end
+
+  private def handle_completion_request(message : LSP::CompletionRequest)
+    return nil unless @pending_requests.includes? message.id
+    file_uri = URI.parse message.params.text_document.uri
+    workspace.completion(@server, file_uri, message.params.position, message.params.context.try &.trigger_character)
+  end
+
+  private def handle_document_symbols_request(message : LSP::DocumentSymbolsRequest)
+    @documents_lock.synchronize do
+      file_uri = URI.parse message.params.text_document.uri
+      document_symbols = workspace.document_symbols(@server, file_uri)
+
+      if @server.client_capabilities.text_document.try &.document_symbol.try &.hierarchical_document_symbol_support
+        document_symbols
+      else
+        document_symbols.try &.reduce([] of LSP::SymbolInformation) { |accumulator, document_symbol|
+          accumulator.concat(document_symbol.to_symbol_information_array(message.params.text_document.uri))
+        }
+      end
+    end
+  end
+
+  private def handle_workspace_symbol_request(message : LSP::WorkspaceSymbolRequest)
+    @documents_lock.synchronize do
+      workspace.workspace_symbol(@server, message.params.query)
+    end
   end
 end

@@ -1,3 +1,4 @@
+require "../support/unwrap"
 require "spec"
 require "../../src/crystalline/requires"
 require "../../src/crystalline/main"
@@ -111,9 +112,9 @@ describe "lightweight edge cases" do
     context = Crystalline::CompletionContext.detect(line, cursor, nil)
     context.should_not be_nil
 
-    items = Crystalline::Lightweight::Completion.complete(source, line_number, context.not_nil!, query)
+    items = Crystalline::Lightweight::Completion.complete(source, line_number, context.unwrap!, query)
     items.should_not be_nil
-    items.not_nil!.map(&.insert_text).compact.should contain("shout")
+    items.unwrap!.compact_map(&.insert_text).should contain("shout")
   end
 
   it "definitions resolve a require to a real file" do
@@ -124,7 +125,7 @@ describe "lightweight edge cases" do
     # Cursor on the string content.
     locations = Crystalline::Lightweight::Definitions.definitions(source, uri, 0, 10, query)
     locations.should_not be_nil
-    locations.not_nil!.first.uri.should contain("uri.cr")
+    locations.unwrap!.first.uri.should contain("uri.cr")
   end
 
   it "resolves methods on stdlib receivers from the prelude" do
@@ -149,9 +150,9 @@ describe "lightweight edge cases" do
     context = Crystalline::CompletionContext.detect(line, line.size - 1, nil)
     context.should_not be_nil
 
-    items = Crystalline::Lightweight::Completion.complete(source, line_number, context.not_nil!, query)
+    items = Crystalline::Lightweight::Completion.complete(source, line_number, context.unwrap!, query)
     items.should_not be_nil
-    names = items.not_nil!.map(&.insert_text).compact
+    names = items.unwrap!.compact_map(&.insert_text)
     names.should contain("first?")
     names.should contain("find")
   end
@@ -170,9 +171,9 @@ describe "lightweight edge cases" do
     context = Crystalline::CompletionContext.detect(line, line.size - 1, nil)
     context.should_not be_nil
 
-    items = Crystalline::Lightweight::Completion.complete(source, line_number, context.not_nil!, query)
+    items = Crystalline::Lightweight::Completion.complete(source, line_number, context.unwrap!, query)
     items.should_not be_nil
-    names = items.not_nil!.map(&.insert_text).compact
+    names = items.unwrap!.compact_map(&.insert_text)
     names.should contain("to_s")
     names.should contain("to_i32")
   end
@@ -191,9 +192,9 @@ describe "lightweight edge cases" do
     context = Crystalline::CompletionContext.detect(line, line.size - 1, nil)
     context.should_not be_nil
 
-    items = Crystalline::Lightweight::Completion.complete(source, line_number, context.not_nil!, query)
+    items = Crystalline::Lightweight::Completion.complete(source, line_number, context.unwrap!, query)
     items.should_not be_nil
-    items.not_nil!.map(&.insert_text).compact.should contain("call")
+    items.unwrap!.compact_map(&.insert_text).should contain("call")
   end
 
   it "narrows case subjects by when-types" do
@@ -223,9 +224,9 @@ describe "lightweight edge cases" do
     context = Crystalline::CompletionContext.detect(line, line.size - 1, nil)
     context.should_not be_nil
 
-    items = Crystalline::Lightweight::Completion.complete(source, line_number, context.not_nil!, query)
+    items = Crystalline::Lightweight::Completion.complete(source, line_number, context.unwrap!, query)
     items.should_not be_nil
-    items.not_nil!.map(&.insert_text).compact.should contain("name")
+    items.unwrap!.compact_map(&.insert_text).should contain("name")
   end
 
   it "resolves range-slice receivers as the array, not the element" do
@@ -242,11 +243,11 @@ describe "lightweight edge cases" do
     context = Crystalline::CompletionContext.detect(line, line.size - 1, nil)
     context.should_not be_nil
 
-    items = Crystalline::Lightweight::Completion.complete(source, line_number, context.not_nil!, query)
+    items = Crystalline::Lightweight::Completion.complete(source, line_number, context.unwrap!, query)
     items.should_not be_nil
     # A slice returns the array: `first?`/`find` belong to the array, not
     # to its Int32 element.
-    names = items.not_nil!.map(&.insert_text).compact
+    names = items.unwrap!.compact_map(&.insert_text)
     names.should contain("first?")
     names.should contain("find")
   end
@@ -271,8 +272,8 @@ describe "lightweight edge cases" do
     context = Crystalline::CompletionContext.detect(line, cursor, nil)
     context.should_not be_nil
 
-    items = Crystalline::Lightweight::Completion.complete(source, line_number, context.not_nil!, query)
+    items = Crystalline::Lightweight::Completion.complete(source, line_number, context.unwrap!, query)
     items.should_not be_nil
-    items.not_nil!.map(&.insert_text).compact.should contain("upcase")
+    items.unwrap!.compact_map(&.insert_text).should contain("upcase")
   end
 end

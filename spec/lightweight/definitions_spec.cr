@@ -1,3 +1,4 @@
+require "../support/unwrap"
 require "spec"
 require "../../src/crystalline/requires"
 require "../../src/crystalline/main"
@@ -47,7 +48,7 @@ describe Crystalline::Lightweight::Definitions do
 
     locations = Crystalline::Lightweight::Definitions.definitions(source, file_uri, line_number, character, query)
     locations.should_not be_nil
-    locations.not_nil!.first.range.start.line.should eq(0)
+    locations.unwrap!.first.range.start.line.should eq(0)
   end
 
   it "finds method definitions for resolved receivers" do
@@ -69,7 +70,7 @@ describe Crystalline::Lightweight::Definitions do
 
     locations = Crystalline::Lightweight::Definitions.definitions(source, file_uri, line_number, character, query)
     locations.should_not be_nil
-    locations.not_nil!.first.range.start.line.should eq(1)
+    locations.unwrap!.first.range.start.line.should eq(1)
   end
 
   it "finds top-level method definitions" do
@@ -89,7 +90,7 @@ describe Crystalline::Lightweight::Definitions do
 
     locations = Crystalline::Lightweight::Definitions.definitions(source, file_uri, line_number, character, query)
     locations.should_not be_nil
-    locations.not_nil!.first.range.start.line.should eq(0)
+    locations.unwrap!.first.range.start.line.should eq(0)
   end
 
   it "finds method definitions through richer helper chains" do
@@ -119,13 +120,13 @@ describe Crystalline::Lightweight::Definitions do
     dig_character = lines[dig_line_number].rindex!("shout") + 2
     dig_locations = Crystalline::Lightweight::Definitions.definitions(source, file_uri, dig_line_number, dig_character, query)
     dig_locations.should_not be_nil
-    dig_locations.not_nil!.first.range.start.line.should eq(1)
+    dig_locations.unwrap!.first.range.start.line.should eq(1)
 
     find_bang_line_number = lines.index! { |line| line.strip == "items.find!.shout" }
     find_bang_character = lines[find_bang_line_number].rindex!("shout") + 2
     find_bang_locations = Crystalline::Lightweight::Definitions.definitions(source, file_uri, find_bang_line_number, find_bang_character, query)
     find_bang_locations.should_not be_nil
-    find_bang_locations.not_nil!.first.range.start.line.should eq(1)
+    find_bang_locations.unwrap!.first.range.start.line.should eq(1)
 
     inherited_line_number = lines.index! { |line| line.strip == "items.compact_map" }
     inherited_character = lines[inherited_line_number].rindex!("compact_map") + 2
@@ -136,7 +137,7 @@ describe Crystalline::Lightweight::Definitions do
     try_character = lines[try_line_number].rindex!("shout") + 2
     try_locations = Crystalline::Lightweight::Definitions.definitions(source, file_uri, try_line_number, try_character, query)
     try_locations.should_not be_nil
-    try_locations.not_nil!.first.range.start.line.should eq(1)
+    try_locations.unwrap!.first.range.start.line.should eq(1)
   end
 
   it "finds namespace-relative type definitions through the indexed location" do
@@ -159,7 +160,7 @@ describe Crystalline::Lightweight::Definitions do
 
     locations = Crystalline::Lightweight::Definitions.definitions(source, file_uri, line_number, character, query)
     locations.should_not be_nil
-    locations.not_nil!.first.range.start.line.should eq(1)
+    locations.unwrap!.first.range.start.line.should eq(1)
   end
 
   it "finds the declaration of an instance variable" do
@@ -185,7 +186,7 @@ describe Crystalline::Lightweight::Definitions do
 
     locations = Crystalline::Lightweight::Definitions.definitions(source, file_uri, line_number, character, query)
     locations.should_not be_nil
-    locations.not_nil!.first.range.start.line.should eq(1)
+    locations.unwrap!.first.range.start.line.should eq(1)
   end
 
   it "jumps to the accessor macro for a bare getter self-call" do
@@ -207,7 +208,7 @@ describe Crystalline::Lightweight::Definitions do
 
     locations = Crystalline::Lightweight::Definitions.definitions(source, file_uri, line_number, character, query)
     locations.should_not be_nil
-    locations.not_nil!.first.range.start.line.should eq(1)
+    locations.unwrap!.first.range.start.line.should eq(1)
   end
 
   it "jumps to the first assignment for an undeclared ivar" do
@@ -231,7 +232,7 @@ describe Crystalline::Lightweight::Definitions do
 
     locations = Crystalline::Lightweight::Definitions.definitions(source, file_uri, line_number, character, query)
     locations.should_not be_nil
-    locations.not_nil!.first.range.start.line.should eq(2)
+    locations.unwrap!.first.range.start.line.should eq(2)
   end
 
   it "finds the shorthand ivar argument of initialize" do
@@ -251,6 +252,6 @@ describe Crystalline::Lightweight::Definitions do
 
     locations = Crystalline::Lightweight::Definitions.definitions(source, file_uri, line_number, character, query)
     locations.should_not be_nil
-    locations.not_nil!.first.range.start.line.should eq(1)
+    locations.unwrap!.first.range.start.line.should eq(1)
   end
 end

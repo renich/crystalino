@@ -35,7 +35,7 @@ module Crystalline::Lightweight
       end
 
       token = line[start_index, end_index - start_index]?
-      return {nil, "empty token at cursor"} unless token && !token.empty?
+      return {nil, "empty token at cursor"} if token.nil? || token.empty?
 
       if start_index > 0 && line[start_index - 1] == '.' && !(start_index > 1 && line[start_index - 2] == '.')
         # The receiver may span lines: walk back over the whole source
@@ -52,6 +52,25 @@ module Crystalline::Lightweight
         return {hover, hover ? "resolved" : "no lightweight method hover for receiver '#{receiver}' and method '#{token}'"}
       end
 
+      resolve_hover_for_token(token, start_index)
+    end
+
+    private def resolve_hover_for_token(token : String, start_index : Int32) : {LSP::Hover?, String}
+      if hover_res = resolve_hover_for_type_or_var(token)
+        return hover_res
+      end
+
+      if Resolver.local_name?(token)
+        # A bare name may be a self-call (e.g. a `getter!` used without an
+        # explicit receiver): resolve it as a method on the enclosing type.
+        hover = hover_for_local(token) || hover_for_method("self", token, start_index) || hover_for_top_level_method(token)
+        return {hover, hover ? "resolved" : "could not infer local or top-level method '#{token}'"}
+      end
+
+      {nil, "unsupported hover token '#{token}'"}
+    end
+
+    private def resolve_hover_for_type_or_var(token : String) : {LSP::Hover?, String}?
       if token == "self"
         hover = hover_for_self
         return {hover, hover ? "resolved" : "could not infer self type"}
@@ -71,15 +90,7 @@ module Crystalline::Lightweight
         hover = hover_for_class_var(token)
         return {hover, hover ? "resolved" : "could not infer class var '#{token}'"}
       end
-
-      if Resolver.local_name?(token)
-        # A bare name may be a self-call (e.g. a `getter!` used without an
-        # explicit receiver): resolve it as a method on the enclosing type.
-        hover = hover_for_local(token) || hover_for_method("self", token, start_index) || hover_for_top_level_method(token)
-        return {hover, hover ? "resolved" : "could not infer local or top-level method '#{token}'"}
-      end
-
-      {nil, "unsupported hover token '#{token}'"}
+      nil
     end
 
     # Compiler-intrinsic predicates lexed as token keywords (`nil?`,

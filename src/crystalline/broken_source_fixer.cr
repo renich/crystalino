@@ -13,29 +13,7 @@ class Crystalline::BrokenSourceFixer
     # recover from: append a placeholder identifier so the rest of the source
     # still parses (and completion on the receiver keeps working).
     lines = source.lines.map do |line|
-      # A trailing dot inside a comment is sentence punctuation, not a
-      # method-call receiver: never append the placeholder there.
-      if !line.lstrip.starts_with?("#") && (dot_index = trailing_dot_index(line))
-        # The truncation deleted the line's tail, which may have held the
-        # closing delimiters of calls opened before the dot: re-close them
-        # right after the placeholder so the rest of the file still parses.
-        closers = missing_closers(line[0...dot_index])
-        # A cut inside the true-branch of a ternary (`cond ? foo.`) deleted
-        # the else branch: supply `: nil` or the parser stops at the next
-        # `end` expecting the ternary's `:`.
-        ternary = ternary_else_suffix(line[0...dot_index])
-        "#{line[0...dot_index + 1]}placeholder#{closers}#{ternary}#{line[dot_index + 1..]}#{line.ends_with?('\n') ? '\n' : ""}"
-      elsif !line.lstrip.starts_with?("#") && (sigil_match = line.match(/@+$/))
-        # A lone sigil (`@` or `@@`) mid-edit is the same kind of error:
-        # give it a placeholder name so the rest of the source parses.
-        "#{line[0...sigil_match.begin(0)]}#{sigil_match[0]}placeholder#{line.ends_with?('\n') ? '\n' : ""}"
-      elsif !line.lstrip.starts_with?("#") && (colon_match = line.match(/::$/))
-        # A trailing `::` (e.g. `when Severity::` mid-edit) needs a CONST
-        # name after it before the source parses.
-        "#{line[0...colon_match.begin(0)]}::Placeholder#{line.ends_with?('\n') ? '\n' : ""}"
-      else
-        line
-      end
+      fix_line(line)
     end
 
     fixed = lines.join("\n")
@@ -88,6 +66,32 @@ class Crystalline::BrokenSourceFixer
     false
   end
 
+  private def self.fix_line(line : String) : String
+    # A trailing dot inside a comment is sentence punctuation, not a
+    # method-call receiver: never append the placeholder there.
+    if !line.lstrip.starts_with?("#") && (dot_index = trailing_dot_index(line))
+      # The truncation deleted the line's tail, which may have held the
+      # closing delimiters of calls opened before the dot: re-close them
+      # right after the placeholder so the rest of the file still parses.
+      closers = missing_closers(line[0...dot_index])
+      # A cut inside the true-branch of a ternary (`cond ? foo.`) deleted
+      # the else branch: supply `: nil` or the parser stops at the next
+      # `end` expecting the ternary's `:`.
+      ternary = ternary_else_suffix(line[0...dot_index])
+      "#{line[0...dot_index + 1]}placeholder#{closers}#{ternary}#{line[dot_index + 1..]}#{line.ends_with?('\n') ? '\n' : ""}"
+    elsif !line.lstrip.starts_with?("#") && (sigil_match = line.match(/@+$/))
+      # A lone sigil (`@` or `@@`) mid-edit is the same kind of error:
+      # give it a placeholder name so the rest of the source parses.
+      "#{line[0...sigil_match.begin(0)]}#{sigil_match[0]}placeholder#{line.ends_with?('\n') ? '\n' : ""}"
+    elsif !line.lstrip.starts_with?("#") && (colon_match = line.match(/::$/))
+      # A trailing `::` (e.g. `when Severity::` mid-edit) needs a CONST
+      # name after it before the source parses.
+      "#{line[0...colon_match.begin(0)]}::Placeholder#{line.ends_with?('\n') ? '\n' : ""}"
+    else
+      line
+    end
+  end
+
   private def self.balance!(lines : Array(String))
     # Keep a stack of opening keywords.
     # We push to the stack when we find an opening keyword and
@@ -97,7 +101,7 @@ class Crystalline::BrokenSourceFixer
     line_index = 0
     while line_index < lines.size
       line = lines[line_index]
-      if line.blank? || line.lstrip.starts_with?('#') || line.lstrip.starts_with?("{%")
+      if should_skip_balance?(line)
         # Blank lines, comment-only lines (can contain any text, e.g.
         # "the end") and macro lines (`{% if ... %}` / `{% end %}` carry
         # their own structure) are never interpreted as keywords.
@@ -106,99 +110,18 @@ class Crystalline::BrokenSourceFixer
       end
 
       keyword = line_keyword(line)
-      indent = line_indent(line)
+      indent = line_indent(line) || 0
       # A blank line before the current line signals a visual dedent: the
       # user left the block (without typing `end`).
       was_blank_gap = line_index > 0 && lines[line_index - 1].blank?
 
-      # A line can both close a block and open a new one
-      # (`}.try do |x|`, `end.each do |x|`): line_keyword reports only the
-      # trailing opener, so the leading closer would be lost and the block
-      # it closes would leak until a wrong-indent `; end` append corrupts
-      # the line below. Close the leading closer first.
-      if (keyword == "do" || keyword == "{") && (stripped = line.lstrip)
-        if stripped.starts_with?('}')
-          if last_info = stack.last?
-            if last_info.keyword == "{"
-              stack.pop
-            elsif brace_index = stack.rindex { |info| info.keyword == "{" }
-              stack.pop(stack.size - brace_index)
-            end
-          end
-        elsif stripped.starts_with?("end") && (stripped.size == 3 || !stripped[3].ascii_alphanumeric?)
-          if last_info = stack.last?
-            stack.pop if last_info.keyword != "{"
-          end
-        end
-      end
+      pop_leading_closer!(stack, keyword, line)
+      fix_wrong_indentations!(stack, lines, line_index, indent, keyword, line, was_blank_gap)
 
-      loop do
-        last_info = stack.last?
-        break unless last_info
-
-        closing_keyword = closing_keyword(last_info)
-
-        # Nothing to fix unless there's a wrong indent
-        break unless wrong_indent?(indent, keyword, closing_keyword, last_info, line, was_blank_gap)
-
-        # We have a wrong indentation so we fix/close the opening keyword
-        # by adding an "end" (or "}") to it.
-        last_line = lines[line_index - 1]
-
-        lines[line_index - 1] =
-          if last_line.blank?
-            # If the line is empty we can change it to an end
-            # and even use the correct indent.
-            "#{("  " * last_info.indent)}#{closing_keyword}"
-          else
-            "#{last_line}; #{closing_keyword}"
-          end
-
-        stack.pop
-      end
-
-      # If we found a closing keyword matching the last opening keyword,
-      # pop it. A mid-edit can leave an `end` with no opener (e.g. after
-      # deleting a `do |x|` block header): treat it as closing the nearest
-      # matching opener anyway so the rest of the file still parses.
-      if last_info = stack.last?
-        if keyword == "}" && last_info.keyword != "{"
-          # A `}` closes the nearest `{` opener even when inner openers
-          # sit above it (they are implicitly closed by the block's end):
-          # pop everything down to and including the `{`.
-          if brace_index = stack.rindex { |info| info.keyword == "{" }
-            stack.pop(stack.size - brace_index)
-            line_index += 1
-            next
-          end
-        end
-
-        if keyword == closing_keyword(last_info)
-          if indent > last_info.indent + 1
-            # A much deeper `end` is a legit closer aligned with its
-            # branches (`value = if cond\n  a\nelse\n  b\nend` ends deeper
-            # than the `if`): close the opener normally.
-            stack.pop
-          elsif indent > last_info.indent && keyword == "end"
-            # An `end` one level deeper than its opener is an orphan left
-            # behind by a deleted block header: drop the line (without
-            # closing the opener) so the file still parses. A `}` one level
-            # deeper is the normal closing style and is never dropped. The
-            # deletion shifts every later line: keep the stack's stored
-            # indices in sync, and re-examine the line that shifted into
-            # this slot (it may be the enclosing block's real `end`, which
-            # an each_with_index loop would silently skip).
-            lines.delete_at(line_index)
-            stack.map! do |info|
-              info.line_index > line_index ? LineInfo.new(info.line_index - 1, info.indent, info.keyword) : info
-            end
-            next
-          else
-            stack.pop
-          end
-          line_index += 1
-          next
-        end
+      new_index = handle_closing_keyword!(stack, lines, line_index, indent, keyword)
+      if new_index
+        line_index = new_index
+        next
       end
 
       # Push to the stack if we found an opening keyword.
@@ -217,14 +140,145 @@ class Crystalline::BrokenSourceFixer
     end
   end
 
+  private def self.pop_leading_closer!(stack : Array(LineInfo), keyword : String?, line : String)
+    return unless keyword == "do" || keyword == "{"
+
+    stripped = line.lstrip
+    last_info = stack.last?
+    return unless last_info
+
+    if stripped.starts_with?('}')
+      pop_brace_closer!(stack, last_info)
+    elsif stripped.starts_with?("end") && (stripped.size == 3 || !stripped[3].ascii_alphanumeric?)
+      stack.pop if last_info.keyword != "{"
+    end
+  end
+
+  private def self.pop_brace_closer!(stack : Array(LineInfo), last_info : LineInfo)
+    if last_info.keyword == "{"
+      stack.pop
+    elsif brace_index = stack.rindex { |info| info.keyword == "{" }
+      stack.pop(stack.size - brace_index)
+    end
+  end
+
+  private def self.fix_wrong_indentations!(
+    stack : Array(LineInfo),
+    lines : Array(String),
+    line_index : Int32,
+    indent : Int32,
+    keyword : String?,
+    line : String,
+    was_blank_gap : Bool,
+  )
+    loop do
+      last_info = stack.last?
+      break unless last_info
+
+      closing_kw = closing_keyword(last_info)
+
+      break unless wrong_indent?(indent, keyword, closing_kw, last_info, line, was_blank_gap)
+
+      last_line = lines[line_index - 1]
+
+      lines[line_index - 1] =
+        if last_line.blank?
+          "#{("  " * last_info.indent)}#{closing_kw}"
+        else
+          "#{last_line}; #{closing_kw}"
+        end
+
+      stack.pop
+    end
+  end
+
+  private def self.handle_closing_keyword!(
+    stack : Array(LineInfo),
+    lines : Array(String),
+    line_index : Int32,
+    indent : Int32,
+    keyword : String?,
+  ) : Int32?
+    last_info = stack.last?
+    return nil unless last_info
+
+    if keyword == "}" && last_info.keyword != "{"
+      if brace_index = stack.rindex { |info| info.keyword == "{" }
+        stack.pop(stack.size - brace_index)
+        return line_index + 1
+      end
+    end
+
+    if keyword == closing_keyword(last_info)
+      if indent > last_info.indent + 1
+        stack.pop
+      elsif indent > last_info.indent && keyword == "end"
+        lines.delete_at(line_index)
+        stack.map! do |info|
+          info.line_index > line_index ? LineInfo.new(info.line_index - 1, info.indent, info.keyword) : info
+        end
+        return line_index
+      else
+        stack.pop
+      end
+      return line_index + 1
+    end
+
+    nil
+  end
+
+  private def self.should_skip_balance?(line : String) : Bool
+    line.blank? || line.lstrip.starts_with?('#') || line.lstrip.starts_with?("{%")
+  end
+
   # The closing delimiters missing from *source*: `(`/`[`/`{` opened
   # without their match (strings, chars and comments are skipped; the
   # callers guard with a parse check, so a miscount simply falls back).
   private def self.missing_closers(source : String) : String
     openers = [] of Char
+    each_code_char(source.chars) do |char, _, _|
+      if char.in?('(', '[', '{')
+        openers << char
+      elsif char.in?(')', ']', '}')
+        if openers.last? == delimiter_counterpart(char)
+          openers.pop
+        end
+      end
+    end
+    openers.reverse.map { |opener| delimiter_counterpart(opener) }.join
+  end
+
+  private def self.skip_regex(chars : Array(Char), index : Int32) : Int32
+    index += 1
+    in_class = false
+    while index < chars.size
+      c = chars[index]
+      if c == '\\'
+        index += 2
+        next
+      elsif c == '['
+        in_class = true
+      elsif c == ']'
+        in_class = false
+      elsif c == '/' && !in_class
+        break
+      end
+      index += 1
+    end
+    index
+  end
+
+  private def self.skip_comment(chars : Array(Char), index : Int32) : Int32
+    index += 1
+    while index < chars.size && chars[index] != '\n'
+      index += 1
+    end
+    index
+  end
+
+  private def self.each_code_char(chars : Array(Char), &)
     quote = nil.as(Char?)
     prev = nil.as(Char?)
-    chars = source.chars
     index = 0
     while index < chars.size
       char = chars[index]
@@ -238,42 +292,16 @@ class Crystalline::BrokenSourceFixer
       elsif char.in?('"', '\'')
         quote = char
       elsif char == '/' && regex_position?(prev)
-        # A regex literal: skip to its unescaped closing slash (a slash
-        # inside a `[...]` character class does not close it), so parens
-        # inside regexes (e.g. `\.try\s*(?:\(\s*)?`) are not counted.
-        index += 1
-        in_class = false
-        while index < chars.size
-          c = chars[index]
-          if c == '\\'
-            index += 2
-            next
-          elsif c == '['
-            in_class = true
-          elsif c == ']'
-            in_class = false
-          elsif c == '/' && !in_class
-            break
-          end
-          index += 1
-        end
+        index = skip_regex(chars, index)
       elsif char == '#'
-        index += 1
-        while index < chars.size && chars[index] != '\n'
-          index += 1
-        end
+        index = skip_comment(chars, index)
         next
-      elsif char.in?('(', '[', '{')
-        openers << char
-      elsif char.in?(')', ']', '}')
-        if openers.last? == delimiter_counterpart(char)
-          openers.pop
-        end
+      else
+        yield char, prev, index
       end
       prev = char unless char.whitespace? || quote
       index += 1
     end
-    openers.reverse.map { |opener| delimiter_counterpart(opener) }.join
   end
 
   # Whether the cut prefix ends inside the true-branch of an unclosed
@@ -283,46 +311,34 @@ class Crystalline::BrokenSourceFixer
   # branch after it on the line. Returns the ` : nil` suffix to supply,
   # or an empty string when the ternary is complete or absent.
   private def self.ternary_else_suffix(prefix : String) : String
+    last_ternary = find_last_ternary_index(prefix)
+    return "" if last_ternary < 0
+
+    has_colon_after?(prefix, last_ternary) ? "" : " : nil"
+  end
+
+  private def self.find_last_ternary_index(prefix : String) : Int32
     last_ternary = -1
-    quote = nil.as(Char?)
-    prev = nil.as(Char?)
-    chars = prefix.chars
-    index = 0
-    while index < chars.size
-      char = chars[index]
-      if quote
-        quote = nil if char == quote
-      elsif char.in?('"', '\'')
-        quote = char
-      elsif char == '?'
-        nxt = index + 1 < chars.size ? chars[index + 1] : nil
-        # A ternary `?` is spaced on both sides; `foo?`, `String?`,
-        # `?a` and the nilable forms `x[0]?` / `foo()?` are not.
+    each_code_char(prefix.chars) do |char, prev, index|
+      if char == '?'
+        nxt = index + 1 < prefix.chars.size ? prefix.chars[index + 1] : nil
         if prev && nxt && nxt.whitespace? && !prev.ascii_alphanumeric? && prev != '_' && prev != '?' && !prev.in?(')', ']', '}')
           last_ternary = index
         end
       end
-      prev = char
-      index += 1
     end
-    return "" if last_ternary < 0
+    last_ternary
+  end
 
+  private def self.has_colon_after?(prefix : String, from_index : Int32) : Bool
     has_colon = false
-    quote = nil.as(Char?)
-    index = last_ternary + 1
-    while index < chars.size
-      char = chars[index]
-      if quote
-        quote = nil if char == quote
-      elsif char.in?('"', '\'')
-        quote = char
-      elsif char == ':'
+    each_code_char(prefix.chars[from_index + 1..]) do |char, _, _|
+      if char == ':'
         has_colon = true
         break
       end
-      index += 1
     end
-    has_colon ? "" : " : nil"
+    has_colon
   end
 
   # Whether a `/` at this position starts a regex literal rather than a
@@ -360,102 +376,87 @@ class Crystalline::BrokenSourceFixer
     line_index = 0
     while line_index < lines.size
       line = lines[line_index]
-      if dot = line.rindex(".placeholder")
-        entering = openers_before(lines, line_index)
-        if entering.empty?
-          # The cut may have deleted the call's OWN opener (`Foo.new(` ->
-          # `Foo.`): the call's argument lines dangle below with no
-          # delimiter to anchor them. Drop the tail when it looks like a
-          # pure call remainder.
-          if drop_dangling_args!(lines, line_index, deletions)
-            changed = true
-          end
-        else
-          # The cut is directly inside the TOP delimiter opened before it
-          # (e.g. `Location.new(` above `file_uri.`); the openers further
-          # down the stack belong to enclosing blocks whose closers come
-          # later and must be left alone.
-          top = entering[0]
-          if top == '}'
-            # The cut sits inside a brace block whose own closer may be
-            # far below, while the deleted call's closer dangles right
-            # under the cut. Drop the dangling tail; close the brace
-            # inline only when the tail ends in the brace's own `}` (a
-            # tuple), not a `)`/`]` that belongs to the deleted call.
-            closer = drop_dangling_args!(lines, line_index, deletions)
-            if closer
-              changed = true
-              if closer == '}'
-                lines[line_index] = line.sub(".placeholder", ".placeholder}")
-              end
-            else
-              # No clean tail: fall back to closing the brace inline and
-              # dropping its own orphaned remainder (parse-guarded).
-              lines[line_index] = line.sub(".placeholder", ".placeholder}")
-              stack = ['{']
-              j = line_index + 1
-              while j < lines.size && !stack.empty? && j - line_index <= 100
-                stack = consume_delimiters(stack, lines[j])
-                j += 1
-              end
-              if stack.empty? && j > line_index + 1
-                deletions << {line_index + 1, j - 1}
-                changed = true
-              end
-            end
-          else
-            # A call/array cut: close the nested calls inline (the outer
-            # calls' closers would otherwise be eaten by the tail drop,
-            # orphaning their openers) and drop the orphaned remainder —
-            # the remaining argument lines up to and including the line
-            # closing the last nested opener. The closers are appended
-            # after the line pass's own closers so the innermost
-            # (same-line) call closes first. A `}` in *entering* is an
-            # ENCLOSING brace block whose own body and closers live
-            # below the cut: it is left alone (its `end`/`}` lines stay).
-            # A mismatched closer or a scan that never balances leaves
-            # the file as-is (the parse guards fall back).
-            prefix = entering[0...(entering.index('}') || entering.size)]
-            lines[line_index] = "#{line}#{prefix}"
-            # prefix is innermost-first; the scan pops the stack top, so
-            # the counterparts must be pushed outermost-first.
-            stack = prefix.chars.reverse!.map { |closer| delimiter_counterpart(closer) }
-            j = line_index + 1
-            while j < lines.size && !stack.empty? && j - line_index <= 100
-              stack = consume_delimiters(stack, lines[j])
-              j += 1
-            end
-            if stack.empty? && j > line_index + 1
-              # An inner call's orphaned closer (`),`) can pop the scan
-              # early, leaving the outer call's real closer dangling:
-              # when the emptied line is comma-suffixed (mid-call), the
-              # outer call's remaining argument lines still dangle below.
-              # Extend the deletion over them when they form a pure arg
-              # tail (delimiter balance goes negative at its closer).
-              if j < lines.size && lines[j - 1].strip.ends_with?(',')
-                b = 0
-                k = j
-                while k < lines.size && k - j <= 30
-                  b += net_delimiters(lines[k])
-                  if b < 0
-                    j = k + 1
-                    break
-                  end
-                  k += 1
-                end
-              end
-              deletions << {line_index + 1, j - 1}
-              changed = true
-            end
-          end
+      has_dot = line.rindex(".placeholder")
+      if has_dot
+        if process_multiline_call_tail!(lines, line_index, deletions, line)
+          changed = true
         end
       end
       line_index += 1
     end
-    deletions.reverse_each do |from, to|
-      to.downto(from) { |i| lines.delete_at(i) }
+    deletions.reverse_each do |from_index, to_index|
+      to_index.downto(from_index) { |i| lines.delete_at(i) }
     end
     changed
+  end
+
+  private def self.process_multiline_call_tail!(lines : Array(String), line_index : Int32, deletions : Array({Int32, Int32}), line : String) : Bool
+    entering = openers_before(lines, line_index)
+    if entering.empty?
+      return drop_dangling_args!(lines, line_index, deletions) ? true : false
+    end
+
+    top = entering[0]
+    if top == '}'
+      process_brace_call_tail!(lines, line_index, deletions, line)
+    else
+      process_paren_call_tail!(lines, line_index, deletions, line, entering)
+    end
+  end
+
+  private def self.process_brace_call_tail!(lines : Array(String), line_index : Int32, deletions : Array({Int32, Int32}), line : String) : Bool
+    closer = drop_dangling_args!(lines, line_index, deletions)
+    if closer
+      if closer == '}'
+        lines[line_index] = line.sub(".placeholder", ".placeholder}")
+      end
+      return true
+    end
+
+    lines[line_index] = line.sub(".placeholder", ".placeholder}")
+    stack = ['{']
+    j = line_index + 1
+    while j < lines.size && !stack.empty? && j - line_index <= 100
+      stack = consume_delimiters(stack, lines[j])
+      j += 1
+    end
+    if stack.empty? && j > line_index + 1
+      deletions << {line_index + 1, j - 1}
+      return true
+    end
+    false
+  end
+
+  private def self.process_paren_call_tail!(lines : Array(String), line_index : Int32, deletions : Array({Int32, Int32}), line : String, entering : String) : Bool
+    prefix = entering[0...(entering.index('}') || entering.size)]
+    lines[line_index] = "#{line}#{prefix}"
+    stack = prefix.chars.reverse!.map { |chr| delimiter_counterpart(chr) }
+    j = line_index + 1
+    while j < lines.size && !stack.empty? && j - line_index <= 100
+      stack = consume_delimiters(stack, lines[j])
+      j += 1
+    end
+    if stack.empty? && j > line_index + 1
+      j = find_args_tail_end(lines, j)
+      deletions << {line_index + 1, j - 1}
+      return true
+    end
+    false
+  end
+
+  private def self.find_args_tail_end(lines : Array(String), start_j : Int32) : Int32
+    return start_j unless start_j < lines.size && lines[start_j - 1].strip.ends_with?(',')
+
+    b = 0
+    k = start_j
+    while k < lines.size && k - start_j <= 30
+      b += net_delimiters(lines[k])
+      if b < 0
+        return k + 1
+      end
+      k += 1
+    end
+    start_j
   end
 
   # Re-opens a `do`-block whose header a trailing-dot cut deleted: when
@@ -472,33 +473,7 @@ class Crystalline::BrokenSourceFixer
       base = line_indent(line)
       next unless base
 
-      j = i + 1
-      while j < lines.size && (lines[j].blank? || lines[j].lstrip.starts_with?('#'))
-        j += 1
-      end
-      next if j >= lines.size
-      next unless (first_indent = line_indent(lines[j])) && first_indent > base
-
-      found = nil
-      k = j
-      while k < lines.size && k - i <= 30
-        l = lines[k]
-        if l.blank? || l.lstrip.starts_with?('#')
-          k += 1
-          next
-        end
-        ind = line_indent(l)
-        stripped = l.lstrip
-        if ind == base && stripped.starts_with?("end") && (stripped.size == 3 || !stripped[3].ascii_alphanumeric?)
-          found = k
-          break
-        end
-        # Any line at or above the cut's indent before the `end` means
-        # the lines below are not a block body.
-        break unless ind && ind > base
-        k += 1
-      end
-      next unless found
+      next unless has_valid_block_tail?(lines, i, base)
 
       candidate = lines.dup
       candidate[i] = "#{line} do"
@@ -507,6 +482,39 @@ class Crystalline::BrokenSourceFixer
       changed = true
     end
     changed
+  end
+
+  private def self.has_valid_block_tail?(lines : Array(String), i : Int32, base : Int32) : Bool
+    j = skip_blank_and_comment_lines(lines, i + 1)
+    return false if j >= lines.size
+
+    first_indent = line_indent(lines[j])
+    return false unless first_indent > base
+
+    k = j
+    while k < lines.size && k - i <= 30
+      l = lines[k]
+      if l.blank? || l.lstrip.starts_with?('#')
+        k += 1
+        next
+      end
+      ind = line_indent(l)
+      stripped = l.lstrip
+      if ind == base && stripped.starts_with?("end") && (stripped.size == 3 || !stripped[3].ascii_alphanumeric?)
+        return true
+      end
+      return false unless ind > base
+      k += 1
+    end
+    false
+  end
+
+  private def self.skip_blank_and_comment_lines(lines : Array(String), start_idx : Int32) : Int32
+    j = start_idx
+    while j < lines.size && (lines[j].blank? || lines[j].lstrip.starts_with?('#'))
+      j += 1
+    end
+    j
   end
 
   # The closers needed to close the delimiters opened before *line_index*
@@ -518,53 +526,14 @@ class Crystalline::BrokenSourceFixer
     line_index.times do |i|
       line = lines[i]
       next if line.lstrip.starts_with?('#')
-      quote = nil.as(Char?)
-      prev = nil.as(Char?)
-      chars = line.chars
-      index = 0
-      while index < chars.size
-        char = chars[index]
-        if quote
-          if char == '\\'
-            index += 2
-            next
-          elsif char == quote
-            quote = nil
-          end
-        elsif char.in?('"', '\'')
-          quote = char
-        elsif char == '/' && regex_position?(prev)
-          index += 1
-          in_class = false
-          while index < chars.size
-            c = chars[index]
-            if c == '\\'
-              index += 2
-              next
-            elsif c == '['
-              in_class = true
-            elsif c == ']'
-              in_class = false
-            elsif c == '/' && !in_class
-              break
-            end
-            index += 1
-          end
-        elsif char == '#'
-          index += 1
-          while index < chars.size && chars[index] != '\n'
-            index += 1
-          end
-          next
-        elsif char.in?('(', '[', '{')
+      each_code_char(line.chars) do |char, _, _|
+        if char.in?('(', '[', '{')
           stack << char
         elsif char.in?(')', ']', '}')
           if stack.last? == delimiter_counterpart(char)
             stack.pop
           end
         end
-        prev = char unless char.whitespace? || quote
-        index += 1
       end
     end
     stack.reverse.map { |opener| delimiter_counterpart(opener) }.join
@@ -578,13 +547,8 @@ class Crystalline::BrokenSourceFixer
   # window, and no keyword line is crossed. Returns the closer char of the
   # dropped tail, or nil when no clean tail was found.
   private def self.drop_dangling_args!(lines : Array(String), line_index : Int32, deletions : Array({Int32, Int32})) : Char?
-    j = line_index + 1
-    while j < lines.size && (lines[j].blank? || lines[j].lstrip.starts_with?('#'))
-      j += 1
-    end
-    return nil if j >= lines.size
-    first = lines[j].strip
-    return nil unless arg_like_line?(first) || bare_closer_line?(first)
+    j = find_dangling_args_start(lines, line_index)
+    return nil unless j
 
     cut_indent = line_indent(lines[line_index])
     balance = 0
@@ -594,7 +558,7 @@ class Crystalline::BrokenSourceFixer
       # really the next statement. Keyword-looking content DEEPER than
       # the cut (a `try { |doc|` block or an `.end.to_s` call inside the
       # dangling call's own arguments) is part of the tail itself.
-      if balance >= 0 && (kw = line_keyword(line)) && cut_indent && (ind = line_indent(line)) && ind <= cut_indent
+      if balance >= 0 && line_keyword(line) && cut_indent && (ind = line_indent(line)) && ind <= cut_indent
         return nil
       end
       balance += net_delimiters(line)
@@ -606,6 +570,17 @@ class Crystalline::BrokenSourceFixer
       return nil if j - line_index > 30
     end
     nil
+  end
+
+  private def self.find_dangling_args_start(lines : Array(String), line_index : Int32) : Int32?
+    j = line_index + 1
+    while j < lines.size && (lines[j].blank? || lines[j].lstrip.starts_with?('#'))
+      j += 1
+    end
+    return nil if j >= lines.size
+    first = lines[j].strip
+    return nil unless arg_like_line?(first) || bare_closer_line?(first)
+    j
   end
 
   # Whether *stripped* looks like an argument line of a multi-line call:
@@ -625,51 +600,12 @@ class Crystalline::BrokenSourceFixer
   # skipped): +1 per opener, -1 per closer.
   private def self.net_delimiters(line : String) : Int32
     net = 0
-    quote = nil.as(Char?)
-    prev = nil.as(Char?)
-    chars = line.chars
-    index = 0
-    while index < chars.size
-      char = chars[index]
-      if quote
-        if char == '\\'
-          index += 2
-          next
-        elsif char == quote
-          quote = nil
-        end
-      elsif char.in?('"', '\'')
-        quote = char
-      elsif char == '/' && regex_position?(prev)
-        index += 1
-        in_class = false
-        while index < chars.size
-          c = chars[index]
-          if c == '\\'
-            index += 2
-            next
-          elsif c == '['
-            in_class = true
-          elsif c == ']'
-            in_class = false
-          elsif c == '/' && !in_class
-            break
-          end
-          index += 1
-        end
-      elsif char == '#'
-        index += 1
-        while index < chars.size && chars[index] != '\n'
-          index += 1
-        end
-        next
-      elsif char.in?('(', '[', '{')
+    each_code_char(line.chars) do |char, _, _|
+      if char.in?('(', '[', '{')
         net += 1
       elsif char.in?(')', ']', '}')
         net -= 1
       end
-      prev = char unless char.whitespace? || quote
-      index += 1
     end
     net
   end
@@ -679,53 +615,14 @@ class Crystalline::BrokenSourceFixer
   # does not match the top is ignored; the caller treats a stack that
   # never empties as "no clean tail" and falls back.
   private def self.consume_delimiters(stack : Array(Char), line : String) : Array(Char)
-    quote = nil.as(Char?)
-    prev = nil.as(Char?)
-    chars = line.chars
-    index = 0
-    while index < chars.size
-      char = chars[index]
-      if quote
-        if char == '\\'
-          index += 2
-          next
-        elsif char == quote
-          quote = nil
-        end
-      elsif char.in?('"', '\'')
-        quote = char
-      elsif char == '/' && regex_position?(prev)
-        index += 1
-        in_class = false
-        while index < chars.size
-          c = chars[index]
-          if c == '\\'
-            index += 2
-            next
-          elsif c == '['
-            in_class = true
-          elsif c == ']'
-            in_class = false
-          elsif c == '/' && !in_class
-            break
-          end
-          index += 1
-        end
-      elsif char == '#'
-        index += 1
-        while index < chars.size && chars[index] != '\n'
-          index += 1
-        end
-        next
-      elsif char.in?('(', '[', '{')
+    each_code_char(line.chars) do |char, _, _|
+      if char.in?('(', '[', '{')
         stack << char
       elsif char.in?(')', ']', '}')
         if stack.last? == delimiter_counterpart(char)
           stack.pop
         end
       end
-      prev = char unless char.whitespace? || quote
-      index += 1
     end
     stack
   end
@@ -763,6 +660,10 @@ class Crystalline::BrokenSourceFixer
   end
 
   private def self.line_keyword(line : String) : String?
+    opening_keyword(line) || middle_or_closing_keyword(line)
+  end
+
+  private def self.opening_keyword(line : String) : String?
     if line.starts_with?(/\s*
       (
         if |
@@ -781,24 +682,18 @@ class Crystalline::BrokenSourceFixer
       )(\s|$)/x)
       $1
     elsif m = line.match(/^\s*(?:[\w.?!@\[\]]+\s*=\s*)(if|unless|while|until|case|select)\s/)
-      # An assignment-form opener (`value = if cond`): the `if` does not
-      # start the line, but it still opens a block closed by `end`.
       m[1]
     elsif line.matches?(/\s*begin\s*$/)
       "begin"
     elsif line.ends_with?(/\s*do(\s+\|[^|]+\|)?\s*$/)
       "do"
-    elsif line.ends_with?(/\s*\)\s*{(\s*\|[^|]+\|)?\s*$/)
+    elsif line.ends_with?(/\s*\)\s*{(\s*\|[^|]+\|)?\s*$/) || line.ends_with?(/\s*[\w\d]\s*{(\s*\|[^|]+\|)?\s*$/) || line.matches?(/\s*\{\s*(\|[^|]*\|)?\s*$/)
       "{"
-    elsif line.ends_with?(/\s*[\w\d]\s*{(\s*\|[^|]+\|)?\s*$/)
-      "{"
-    elsif line.matches?(/\s*\{\s*(\|[^|]*\|)?\s*$/)
-      # A bare `{` (or `{ |x|`) on its own line — a multi-line tuple or
-      # block opened without a call before it. Without this, the `}` that
-      # closes it would rindex-pop an EARLIER `{` (and everything above it,
-      # including still-open do-blocks).
-      "{"
-    elsif m = line.match(/(?:^|\W)(end|})([\s.,)\]}]|$)/)
+    end
+  end
+
+  private def self.middle_or_closing_keyword(line : String) : String?
+    if m = line.match(/(?:^|\W)(end|})([\s.,)\]}]|$)/)
       m[1]
     elsif line.matches?(/\s*else\s*$/)
       "else"
@@ -808,8 +703,6 @@ class Crystalline::BrokenSourceFixer
       "rescue"
     elsif line.matches?(/\s*ensure\s*$/)
       "ensure"
-    else
-      nil
     end
   end
 
@@ -833,66 +726,31 @@ class Crystalline::BrokenSourceFixer
     line : String,
     was_blank_gap : Bool,
   )
-    # If the indent is less than the opening one it's definitely wrong.
-    if indent < last_info.indent
-      return true
-    end
+    return true if indent < last_info.indent
+    return false if indent > last_info.indent
+    return false if special_cases_allow_indent?(keyword, closing_keyword, last_info, line)
 
-    # If the indent is greater, it's all good (it's probably content inside that definition)
-    if indent > last_info.indent
-      return false
-    end
+    was_blank_gap
+  end
 
-    # Equal indentation is only wrong for a visual dedent; an arbitrary
-    # statement at the same indentation is content (e.g. `next unless ...`
-    # inside a block), and closing the open keyword for it would corrupt
-    # the structure. Recognized keywords (closing keyword, else/elsif/
-    # rescue/ensure, continuation lines) are never treated as dedents.
+  private def self.special_cases_allow_indent?(
+    keyword : String?,
+    closing_keyword : String?,
+    last_info : LineInfo,
+    line : String,
+  ) : Bool
     stripped_line = line.strip
-    if stripped_line.ends_with?(')') || stripped_line.ends_with?(']')
-      return false
-    end
+    return true if stripped_line.ends_with?(')') || stripped_line.ends_with?(']')
+    return true if keyword == closing_keyword
+    return true if allow_control_flow_indent?(keyword, last_info)
+    return true if last_info.keyword == "def" && stripped_line == ")"
+    false
+  end
 
-    # All good if it's the closing keyword to an opening definition
-    if keyword == closing_keyword
-      return false
-    end
-
-    # Some special cases: else and elsif have the same indentation as
-    # the opening keyword but they don't close it (more content is expected
-    # to come until the "end" keyword)
-    if last_info.keyword == "if" && keyword == "else"
-      return false
-    end
-
-    if last_info.keyword == "if" && keyword == "elsif"
-      return false
-    end
-
-    if last_info.keyword == "unless" && keyword == "else"
-      return false
-    end
-
-    if last_info.keyword.in?("begin", "def", "do") && keyword.in?("rescue", "ensure", "else")
-      return false
-    end
-
-    # A def signature can also be defined in multiple lines, like this:
-    #
-    # def foo(
-    #   x, y
-    # )
-    #
-    # In that case we don't want to consider the closing parentheses
-    # as having wrong indentation.
-    if last_info.keyword == "def" && line.strip == ")"
-      return false
-    end
-
-    if was_blank_gap
-      return true
-    end
-
+  private def self.allow_control_flow_indent?(keyword : String?, last_info : LineInfo) : Bool
+    return true if last_info.keyword == "if" && keyword.in?("else", "elsif")
+    return true if last_info.keyword == "unless" && keyword == "else"
+    return true if last_info.keyword.in?("begin", "def", "do") && keyword.in?("rescue", "ensure", "else")
     false
   end
 end

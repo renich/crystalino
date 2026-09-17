@@ -1,3 +1,4 @@
+require "./support/unwrap"
 require "spec"
 require "file_utils"
 require "../src/crystalline/requires"
@@ -143,7 +144,7 @@ describe Crystalline::Workspace do
 
       definitions = workspace.definitions(server, uri, position)
       definitions.should_not be_nil
-      definitions.not_nil!.size.should be > 0
+      definitions.unwrap!.size.should be > 0
     end
   end
 
@@ -157,7 +158,7 @@ describe Crystalline::Workspace do
 
     with_workspace_document(source) do |server, workspace, uri|
       # A second project file that is only ever parsed, never compiled.
-      root = workspace.projects.first?.not_nil!.root_uri.decoded_path
+      root = workspace.projects.first?.unwrap!.root_uri.decoded_path
       File.write(Path[root, "src", "helper.cr"], <<-CRYSTAL)
         class LocalHelper
           def shout : String
@@ -169,7 +170,7 @@ describe Crystalline::Workspace do
       position = LSP::Position.new(line: 2, character: 15)
       items = workspace.completion(server, uri, position, nil)
       items.should_not be_nil
-      items.not_nil!.items.map(&.insert_text).compact.should contain("shout")
+      items.unwrap!.items.compact_map(&.insert_text).should contain("shout")
     end
   end
 
@@ -187,7 +188,7 @@ describe Crystalline::Workspace do
     CRYSTAL
 
     with_workspace_document(source) do |server, workspace, uri|
-      project = workspace.projects.first?.not_nil!
+      project = workspace.projects.first?.unwrap!
       result = Crystalline::Analysis.compile(
         server,
         uri,
@@ -197,9 +198,9 @@ describe Crystalline::Workspace do
         compiler_flags: project.flags,
       )
       result.should_not be_nil
-      workspace.seed_semantic_result(project.entry_point?.not_nil!.to_s, result.not_nil!)
+      workspace.seed_semantic_result(project.entry_point?.unwrap!.to_s, result.unwrap!)
 
-      workspace.opened_documents[uri.to_s].not_nil!.update_contents([
+      workspace.opened_documents[uri.to_s].unwrap!.update_contents([
         {"sh", LSP::Range.new(
           start: LSP::Position.new(line: 6, character: 16),
           end: LSP::Position.new(line: 6, character: 21),
@@ -226,7 +227,7 @@ describe Crystalline::Workspace do
     CRYSTAL
 
     with_workspace_document(source) do |server, workspace, uri|
-      project = workspace.projects.first?.not_nil!
+      project = workspace.projects.first?.unwrap!
       workspace.recalculate_dependencies(server, project)
       result = Crystalline::Analysis.compile(
         server,
@@ -237,9 +238,9 @@ describe Crystalline::Workspace do
         compiler_flags: project.flags,
       )
       result.should_not be_nil
-      project.semantic_summary = Crystalline::Lightweight::Summary.from_result(result.not_nil!)
+      project.semantic_summary = Crystalline::Lightweight::Summary.from_result(result.unwrap!)
 
-      mark_workspace_document_dirty(workspace.opened_documents[uri.to_s].not_nil!, source)
+      mark_workspace_document_dirty(workspace.opened_documents[uri.to_s].unwrap!, source)
 
       lines = source.lines(chomp: false)
       line_number = lines.index! { |line| line.includes?("reply_channel.receive.upcase") }
@@ -248,7 +249,7 @@ describe Crystalline::Workspace do
 
       hover = workspace.hover(server, uri, position)
       hover.should_not be_nil
-      hover.not_nil!.contents.as(LSP::MarkupContent).value.should contain("String#upcase")
+      hover.unwrap!.contents.as(LSP::MarkupContent).value.should contain("String#upcase")
     end
   end
 
@@ -284,7 +285,7 @@ describe Crystalline::Workspace do
     CRYSTAL
 
     with_workspace_document(source) do |server, workspace, uri|
-      project = workspace.projects.first?.not_nil!
+      project = workspace.projects.first?.unwrap!
       workspace.recalculate_dependencies(server, project)
       result = Crystalline::Analysis.compile(
         server,
@@ -295,9 +296,9 @@ describe Crystalline::Workspace do
         compiler_flags: project.flags,
       )
       result.should_not be_nil
-      project.semantic_summary = Crystalline::Lightweight::Summary.from_result(result.not_nil!)
+      project.semantic_summary = Crystalline::Lightweight::Summary.from_result(result.unwrap!)
 
-      mark_workspace_document_dirty(workspace.opened_documents[uri.to_s].not_nil!, dirty_source)
+      mark_workspace_document_dirty(workspace.opened_documents[uri.to_s].unwrap!, dirty_source)
 
       lines = dirty_source.lines(chomp: false)
       line_number = lines.index!(&.includes?("greeter.whisper"))
@@ -306,7 +307,7 @@ describe Crystalline::Workspace do
 
       hover = workspace.hover(server, uri, position)
       hover.should_not be_nil
-      hover.not_nil!.contents.as(LSP::MarkupContent).value.should contain("Greeter#whisper() : String")
+      hover.unwrap!.contents.as(LSP::MarkupContent).value.should contain("Greeter#whisper() : String")
     end
   end
 
@@ -329,7 +330,7 @@ describe Crystalline::Workspace do
     CRYSTAL
 
     with_workspace_document(source) do |server, workspace, uri|
-      project = workspace.projects.first?.not_nil!
+      project = workspace.projects.first?.unwrap!
       workspace.recalculate_dependencies(server, project)
       result = Crystalline::Analysis.compile(
         server,
@@ -340,9 +341,9 @@ describe Crystalline::Workspace do
         compiler_flags: project.flags,
       )
       result.should_not be_nil
-      project.semantic_summary = Crystalline::Lightweight::Summary.from_result(result.not_nil!)
+      project.semantic_summary = Crystalline::Lightweight::Summary.from_result(result.unwrap!)
 
-      mark_workspace_document_dirty(workspace.opened_documents[uri.to_s].not_nil!, source)
+      mark_workspace_document_dirty(workspace.opened_documents[uri.to_s].unwrap!, source)
 
       lines = source.lines(chomp: false)
       line_number = lines.index!(&.includes?("node.upcase"))
@@ -351,7 +352,7 @@ describe Crystalline::Workspace do
 
       hover = workspace.hover(server, uri, position)
       hover.should_not be_nil
-      hover.not_nil!.contents.as(LSP::MarkupContent).value.should contain("String#upcase")
+      hover.unwrap!.contents.as(LSP::MarkupContent).value.should contain("String#upcase")
     end
   end
 
@@ -391,7 +392,7 @@ describe Crystalline::Workspace do
     CRYSTAL
 
     with_workspace_document(source) do |server, workspace, uri|
-      project = workspace.projects.first?.not_nil!
+      project = workspace.projects.first?.unwrap!
       workspace.recalculate_dependencies(server, project)
       result = Crystalline::Analysis.compile(
         server,
@@ -402,9 +403,9 @@ describe Crystalline::Workspace do
         compiler_flags: project.flags,
       )
       result.should_not be_nil
-      project.semantic_summary = Crystalline::Lightweight::Summary.from_result(result.not_nil!)
+      project.semantic_summary = Crystalline::Lightweight::Summary.from_result(result.unwrap!)
 
-      mark_workspace_document_dirty(workspace.opened_documents[uri.to_s].not_nil!, source)
+      mark_workspace_document_dirty(workspace.opened_documents[uri.to_s].unwrap!, source)
 
       lines = source.lines(chomp: false)
       line_number = lines.index! { |line| line.includes?("loc.expanded_location.upcase") }
@@ -413,7 +414,7 @@ describe Crystalline::Workspace do
 
       hover = workspace.hover(server, uri, position)
       hover.should_not be_nil
-      hover.not_nil!.contents.as(LSP::MarkupContent).value.should contain("String#upcase")
+      hover.unwrap!.contents.as(LSP::MarkupContent).value.should contain("String#upcase")
     end
   end
 
@@ -433,7 +434,7 @@ describe Crystalline::Workspace do
     CRYSTAL
 
     with_workspace_document(source) do |server, workspace, uri|
-      project = workspace.projects.first?.not_nil!
+      project = workspace.projects.first?.unwrap!
       workspace.recalculate_dependencies(server, project)
       result = Crystalline::Analysis.compile(
         server,
@@ -444,9 +445,9 @@ describe Crystalline::Workspace do
         compiler_flags: project.flags,
       )
       result.should_not be_nil
-      project.semantic_summary = Crystalline::Lightweight::Summary.from_result(result.not_nil!)
+      project.semantic_summary = Crystalline::Lightweight::Summary.from_result(result.unwrap!)
 
-      mark_workspace_document_dirty(workspace.opened_documents[uri.to_s].not_nil!, source)
+      mark_workspace_document_dirty(workspace.opened_documents[uri.to_s].unwrap!, source)
 
       lines = source.lines(chomp: false)
       line_number = lines.index! { |line| line.includes?("reply_channel.receive.upcase") }
@@ -455,7 +456,7 @@ describe Crystalline::Workspace do
 
       hover = workspace.hover(server, uri, position)
       hover.should_not be_nil
-      hover.not_nil!.contents.as(LSP::MarkupContent).value.should contain("Channel(String)#receive()")
+      hover.unwrap!.contents.as(LSP::MarkupContent).value.should contain("Channel(String)#receive()")
     end
   end
 
@@ -471,7 +472,7 @@ describe Crystalline::Workspace do
     CRYSTAL
 
     with_workspace_document(source) do |server, workspace, uri|
-      project = workspace.projects.first?.not_nil!
+      project = workspace.projects.first?.unwrap!
       workspace.recalculate_dependencies(server, project)
       result = Crystalline::Analysis.compile(
         server,
@@ -482,9 +483,9 @@ describe Crystalline::Workspace do
         compiler_flags: project.flags,
       )
       result.should_not be_nil
-      project.semantic_summary = Crystalline::Lightweight::Summary.from_result(result.not_nil!)
+      project.semantic_summary = Crystalline::Lightweight::Summary.from_result(result.unwrap!)
 
-      mark_workspace_document_dirty(workspace.opened_documents[uri.to_s].not_nil!, source)
+      mark_workspace_document_dirty(workspace.opened_documents[uri.to_s].unwrap!, source)
 
       lines = source.lines(chomp: false)
       line_number = lines.index!(&.includes?("item.upcase"))
@@ -493,7 +494,7 @@ describe Crystalline::Workspace do
 
       hover = workspace.hover(server, uri, position)
       hover.should_not be_nil
-      hover.not_nil!.contents.as(LSP::MarkupContent).value.should contain("String#upcase")
+      hover.unwrap!.contents.as(LSP::MarkupContent).value.should contain("String#upcase")
     end
   end
 
@@ -507,7 +508,7 @@ describe Crystalline::Workspace do
     CRYSTAL
 
     with_workspace_document(source) do |server, workspace, uri|
-      project = workspace.projects.first?.not_nil!
+      project = workspace.projects.first?.unwrap!
       workspace.recalculate_dependencies(server, project)
 
       # A second file inside the project root that the entry point does not
@@ -518,7 +519,7 @@ describe Crystalline::Workspace do
       workspace.opened_documents[scratch_uri.to_s] = scratch_document
 
       query = workspace.send_lightweight_query_for_test(scratch_document).should_not be_nil
-      query.not_nil!.find_type("Greeter").should_not be_nil
+      query.unwrap!.find_type("Greeter").should_not be_nil
     end
   end
 
@@ -532,7 +533,7 @@ describe Crystalline::Workspace do
     CRYSTAL
 
     with_workspace_document(source) do |server, workspace, uri|
-      document = workspace.opened_documents[uri.to_s].not_nil!
+      document = workspace.opened_documents[uri.to_s].unwrap!
       mark_workspace_document_dirty(document, source)
 
       lines = source.lines(chomp: false)
@@ -566,13 +567,13 @@ describe Crystalline::Workspace do
     CRYSTAL
 
     with_workspace_document(source) do |_server, workspace, uri|
-      workspace.opened_documents[uri.to_s].not_nil!.update_contents([{source, nil}], version: 1)
-      fixed_source = workspace.opened_documents[uri.to_s].not_nil!.contents
+      workspace.opened_documents[uri.to_s].unwrap!.update_contents([{source, nil}], version: 1)
+      fixed_source = workspace.opened_documents[uri.to_s].unwrap!.contents
       lines = fixed_source.lines(chomp: false)
       line_number = lines.index!(&.includes?("items.unknown_method"))
       character = lines[line_number].rindex!("unknown_method") + 2
-      completion_context = Crystalline::CompletionContext.detect(lines[line_number], character, ".").not_nil!
-      query = workspace.send_lightweight_query_for_test(workspace.opened_documents[uri.to_s].not_nil!).not_nil!
+      completion_context = Crystalline::CompletionContext.detect(lines[line_number], character, ".").unwrap!
+      query = workspace.send_lightweight_query_for_test(workspace.opened_documents[uri.to_s].unwrap!).unwrap!
 
       Crystalline::Lightweight::Hover.diagnose(fixed_source, line_number, character, query).should contain("no lightweight method hover")
       Crystalline::Lightweight::Definitions.diagnose(fixed_source, uri, line_number, character, query).should contain("no lightweight method definitions")
@@ -593,10 +594,10 @@ describe Crystalline::Workspace do
     CRYSTAL
 
     with_workspace_document(source) do |server, workspace, uri|
-      workspace.recalculate_dependencies(server, workspace.projects.first?.not_nil!)
+      workspace.recalculate_dependencies(server, workspace.projects.first?.unwrap!)
 
-      document = workspace.opened_documents[uri.to_s].not_nil!
-      first_query = workspace.send_lightweight_query_for_test(document).not_nil!
+      document = workspace.opened_documents[uri.to_s].unwrap!
+      first_query = workspace.send_lightweight_query_for_test(document).unwrap!
 
       # A second request with the same contents is served from the cache.
       workspace.send_lightweight_query_for_test(document).should be(first_query)
@@ -632,8 +633,8 @@ describe Crystalline::Workspace do
     CRYSTAL
 
     with_workspace_document(source) do |server, workspace, uri|
-      project = workspace.projects.first?.not_nil!
-      entry_point = project.entry_point?.not_nil!
+      project = workspace.projects.first?.unwrap!
+      entry_point = project.entry_point?.unwrap!
       result = Crystalline::Analysis.compile(
         server,
         entry_point,
@@ -645,7 +646,7 @@ describe Crystalline::Workspace do
       result.should_not be_nil
 
       workspace.seed_result_cache(entry_point.to_s, result)
-      workspace.seed_semantic_result(entry_point.to_s, result.not_nil!)
+      workspace.seed_semantic_result(entry_point.to_s, result.unwrap!)
       workspace.result_cache_invalidated?(entry_point.to_s).should be_false
       workspace.semantic_cache_has_key?(entry_point.to_s).should be_true
 
@@ -673,7 +674,7 @@ describe Crystalline::Workspace do
     CRYSTAL
 
     with_workspace_document(source) do |server, workspace, uri|
-      project = workspace.projects.first?.not_nil!
+      project = workspace.projects.first?.unwrap!
       result = Crystalline::Analysis.compile(
         server,
         uri,
@@ -683,7 +684,7 @@ describe Crystalline::Workspace do
         compiler_flags: project.flags,
       )
       result.should_not be_nil
-      workspace.seed_semantic_result(project.entry_point?.not_nil!.to_s, result.not_nil!)
+      workspace.seed_semantic_result(project.entry_point?.unwrap!.to_s, result.unwrap!)
 
       # Edit the buffer, then save it: the buffer is clean again and the
       # last successful compile must still serve the fallback.
@@ -725,7 +726,7 @@ describe Crystalline::Workspace do
     CRYSTAL
 
     with_workspace_document(source) do |server, workspace, uri|
-      project = workspace.projects.first?.not_nil!
+      project = workspace.projects.first?.unwrap!
       result = Crystalline::Analysis.compile(
         server,
         uri,
@@ -735,7 +736,7 @@ describe Crystalline::Workspace do
         compiler_flags: project.flags,
       )
       result.should_not be_nil
-      workspace.seed_semantic_result(project.entry_point?.not_nil!.to_s, result.not_nil!)
+      workspace.seed_semantic_result(project.entry_point?.unwrap!.to_s, result.unwrap!)
       workspace.seed_compiled_source_mtime(uri.decoded_path, File.info(uri.decoded_path).modification_time)
 
       lines = source.lines(chomp: false)

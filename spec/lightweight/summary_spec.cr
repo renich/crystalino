@@ -1,3 +1,4 @@
+require "../support/unwrap"
 require "spec"
 require "../../src/crystalline/requires"
 require "../../src/crystalline/main"
@@ -95,7 +96,7 @@ describe Crystalline::Lightweight::Summary do
 
     build_method = query.methods_for("Factory").find(&.name.==("build"))
     build_method.should_not be_nil
-    build_method.not_nil!.return_type.should eq("Greeter")
+    build_method.unwrap!.return_type.should eq("Greeter")
   end
 
   it "uses semantic summaries to resolve ivar types and inferred receiver chains" do
@@ -136,9 +137,9 @@ describe Crystalline::Lightweight::Summary do
     context = Crystalline::CompletionContext.detect(lines[line_number], lines[line_number].size - 1, nil)
     context.should_not be_nil
 
-    items = Crystalline::Lightweight::Completion.complete(completion_source, line_number, context.not_nil!, query)
+    items = Crystalline::Lightweight::Completion.complete(completion_source, line_number, context.unwrap!, query)
     items.should_not be_nil
-    items.not_nil!.map(&.insert_text).compact.should contain("shout")
+    items.unwrap!.compact_map(&.insert_text).should contain("shout")
   end
 
   it "specializes inherited splat generic owners for tuple receivers" do
@@ -153,7 +154,7 @@ describe Crystalline::Lightweight::Summary do
 
     each_with_object_method = query.methods_for("Tuple(Int32, String)").find(&.name.==("each_with_object"))
     each_with_object_method.should_not be_nil
-    each_with_object_method.not_nil!.owner.should eq("Enumerable(Int32 | String)")
+    each_with_object_method.unwrap!.owner.should eq("Enumerable(Int32 | String)")
   end
 
   it "uses semantic summaries for tuple destructuring and try block inference" do
@@ -189,8 +190,8 @@ describe Crystalline::Lightweight::Summary do
     context = Crystalline::CompletionContext.detect(lines[line_number], cursor, nil)
     context.should_not be_nil
 
-    items = Crystalline::Lightweight::Completion.complete(completion_source, line_number, context.not_nil!, query)
+    items = Crystalline::Lightweight::Completion.complete(completion_source, line_number, context.unwrap!, query)
     items.should_not be_nil
-    items.not_nil!.map(&.insert_text).compact.should contain("shout")
+    items.unwrap!.compact_map(&.insert_text).should contain("shout")
   end
 end

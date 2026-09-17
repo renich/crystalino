@@ -287,7 +287,7 @@ module Crystalline::Lightweight
         top_level: true,
         ignore_diagnostics: true,
       )
-      index = result.try { |r| Index.from_program(r.program) }
+      index = result.try { |parse_result| Index.from_program(parse_result.program) }
       return unless index
 
       compiler_indexes = [] of Index

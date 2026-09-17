@@ -1,3 +1,4 @@
+require "../support/unwrap"
 require "spec"
 require "../../src/crystalline/requires"
 require "../../src/crystalline/main"
@@ -7,7 +8,7 @@ describe Crystalline::Lightweight::PreludeIndex do
   it "round-trips the prelude index through the cache format" do
     original = Crystalline::Lightweight::PreludeIndex.generate
     original.should_not be_nil
-    original = original.not_nil!
+    original = original.unwrap!
     original.types.size.should be > 500
     original.types["String"]?.should_not be_nil
 
@@ -16,7 +17,7 @@ describe Crystalline::Lightweight::PreludeIndex do
       Crystalline::Lightweight::PreludeIndex.save_to_cache_for_test(original, path)
       loaded = Crystalline::Lightweight::PreludeIndex.load_from_cache_for_test(path)
       loaded.should_not be_nil
-      loaded = loaded.not_nil!
+      loaded = loaded.unwrap!
 
       loaded.types.size.should eq(original.types.size)
       loaded.top_level_methods.size.should eq(original.top_level_methods.size)
@@ -29,8 +30,8 @@ describe Crystalline::Lightweight::PreludeIndex do
       # Restrictions and return types survive the round trip.
       to_i = string_type.methods.find(&.name.==("to_i"))
       to_i.should_not be_nil
-      to_i.not_nil!.args.first.name.should eq("base")
-      to_i.not_nil!.args.first.restriction.should eq("Int")
+      to_i.unwrap!.args.first.name.should eq("base")
+      to_i.unwrap!.args.first.restriction.should eq("Int")
     ensure
       File.delete(path) if File.exists?(path)
     end
@@ -39,11 +40,11 @@ describe Crystalline::Lightweight::PreludeIndex do
   it "indexes aliases with the aliased type as their parent" do
     index = Crystalline::Lightweight::PreludeIndex.generate
     index.should_not be_nil
-    index = index.not_nil!
+    index = index.unwrap!
 
     mutex = index.types["Mutex"]?
     mutex.should_not be_nil
-    mutex.not_nil!.kind.should eq(Crystalline::Lightweight::TypeKind::Alias)
-    mutex.not_nil!.parent_types.should contain("Sync::Mutex")
+    mutex.unwrap!.kind.should eq(Crystalline::Lightweight::TypeKind::Alias)
+    mutex.unwrap!.parent_types.should contain("Sync::Mutex")
   end
 end

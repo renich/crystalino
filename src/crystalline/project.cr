@@ -145,9 +145,9 @@ class Crystalline::Project
   # files that are dependencies of a project's entry point match; pass
   # *require_dependency* = false for a pure path-based fit.
   def self.best_fit_for_file(projects : Array(Project), file_uri : URI, *, require_dependency = true) : Project?
-    project_distances = projects.compact_map do |p|
-      distance = p.distance_to_dependency(file_uri, require_dependency: require_dependency)
-      {p, distance} if distance
+    project_distances = projects.compact_map do |project|
+      distance = project.distance_to_dependency(file_uri, require_dependency: require_dependency)
+      {project, distance} if distance
     end
 
     project_distances.sort_by(&.[1]).first?.try(&.[0])

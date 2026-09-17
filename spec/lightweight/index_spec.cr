@@ -1,3 +1,4 @@
+require "../support/unwrap"
 require "spec"
 require "../../src/crystalline/requires"
 require "../../src/crystalline/main"
@@ -80,30 +81,30 @@ describe Crystalline::Lightweight::Index do
 
     foo = index.types["Foo"]?
     foo.should_not be_nil
-    foo.not_nil!.kind.should eq(Crystalline::Lightweight::TypeKind::Module)
-    foo.not_nil!.subtypes.should contain("Foo::Bar")
+    foo.unwrap!.kind.should eq(Crystalline::Lightweight::TypeKind::Module)
+    foo.unwrap!.subtypes.should contain("Foo::Bar")
 
     bar = index.types["Foo::Bar"]?
     bar.should_not be_nil
-    bar = bar.not_nil!
+    bar = bar.unwrap!
     bar.kind.should eq(Crystalline::Lightweight::TypeKind::Class)
 
     baz = bar.methods.find { |method| method.name == "baz" && !method.class_method && !method.macro }
     baz.should_not be_nil
-    baz = baz.not_nil!
+    baz = baz.unwrap!
     baz.return_type.should eq("String")
     baz.args.map(&.restriction).should eq(["Int32"])
 
     make = bar.methods.find { |method| method.name == "make" && method.class_method }
     make.should_not be_nil
-    make = make.not_nil!
+    make = make.unwrap!
     make.return_type.should eq("Foo::Bar")
     make.args.map(&.restriction).should eq(["String"])
 
     top_level = index.top_level_methods.find(&.name.==("top_level"))
     top_level.should_not be_nil
-    top_level.not_nil!.return_type.should eq("Int32")
-    top_level.not_nil!.args.map(&.restriction).should eq(["Bool"])
+    top_level.unwrap!.return_type.should eq("Int32")
+    top_level.unwrap!.args.map(&.restriction).should eq(["Bool"])
   end
 
   it "indexes nested types from single-member source bodies" do
@@ -120,12 +121,12 @@ describe Crystalline::Lightweight::Index do
 
     foo = index.types["Foo"]?
     foo.should_not be_nil
-    foo.not_nil!.subtypes.should contain("Foo::Inner")
+    foo.unwrap!.subtypes.should contain("Foo::Inner")
     index.types["Foo::Inner"]?.should_not be_nil
 
     with_methods = index.types["WithMethods"]?
     with_methods.should_not be_nil
-    with_methods.not_nil!.methods.map(&.name).should contain("bar")
+    with_methods.unwrap!.methods.map(&.name).should contain("bar")
   end
 
   it "indexes accessor macros from source bodies" do
@@ -141,22 +142,22 @@ describe Crystalline::Lightweight::Index do
 
     user = index.types["User"]?.should_not be_nil
 
-    getter = user.methods.find { |m| m.name == "name" && !m.class_method }
+    getter = user.methods.find { |method_node| method_node.name == "name" && !method_node.class_method }
     getter.should_not be_nil
-    getter.not_nil!.return_type.should eq("String")
-    getter.not_nil!.args.should be_empty
+    getter.unwrap!.return_type.should eq("String")
+    getter.unwrap!.args.should be_empty
 
     user.methods.map(&.name).should contain("age")
     user.methods.map(&.name).should contain("age=")
     user.methods.map(&.name).should contain("active?")
 
-    class_getter = user.methods.find { |m| m.name == "count" && m.class_method }
+    class_getter = user.methods.find { |method_node| method_node.name == "count" && method_node.class_method }
     class_getter.should_not be_nil
-    class_getter.not_nil!.return_type.should eq("Int32")
+    class_getter.unwrap!.return_type.should eq("Int32")
 
     setter = user.methods.find(&.name.==("raw="))
     setter.should_not be_nil
-    setter.not_nil!.args.map(&.name).should eq(["value"])
+    setter.unwrap!.args.map(&.name).should eq(["value"])
   end
 
   it "indexes classes defined in macro bodies" do
@@ -188,16 +189,16 @@ describe Crystalline::Lightweight::Index do
 
     entries = store.methods.find(&.name.==("entries"))
     entries.should_not be_nil
-    entries.not_nil!.return_type.should eq("Hash(String, Int32)")
+    entries.unwrap!.return_type.should eq("Hash(String, Int32)")
     store.ivars["@entries"]?.should eq(["Hash(String, Int32)"])
 
     items = store.methods.find(&.name.==("items"))
     items.should_not be_nil
-    items.not_nil!.return_type.should eq("Array(String)")
+    items.unwrap!.return_type.should eq("Array(String)")
 
     count = store.methods.find(&.name.==("count"))
     count.should_not be_nil
-    count.not_nil!.return_type.should be_nil
+    count.unwrap!.return_type.should be_nil
   end
 
   it "indexes private and protected defs from source bodies" do
@@ -217,11 +218,11 @@ describe Crystalline::Lightweight::Index do
 
     secret = user.methods.find(&.name.==("secret"))
     secret.should_not be_nil
-    secret.not_nil!.return_type.should eq("String")
+    secret.unwrap!.return_type.should eq("String")
 
     helper = user.methods.find(&.name.==("helper"))
     helper.should_not be_nil
-    helper.not_nil!.args.map(&.name).should eq(["name"])
+    helper.unwrap!.args.map(&.name).should eq(["name"])
   end
 
   it "indexes records as types with field getters from source bodies" do
@@ -236,12 +237,12 @@ describe Crystalline::Lightweight::Index do
 
     node = result.methods.find(&.name.==("node"))
     node.should_not be_nil
-    node.not_nil!.return_type.should eq("ASTNode")
-    node.not_nil!.args.should be_empty
+    node.unwrap!.return_type.should eq("ASTNode")
+    node.unwrap!.args.should be_empty
 
     program = result.methods.find(&.name.==("program"))
     program.should_not be_nil
-    program.not_nil!.return_type.should eq("Program")
+    program.unwrap!.return_type.should eq("Program")
   end
 
   it "indexes aliases inside module and class bodies" do
@@ -343,14 +344,14 @@ describe Crystalline::Lightweight::Index do
     CRYSTAL
 
     with_args = index.types["WithArgs"]?.should_not be_nil
-    new_method = with_args.methods.find { |m| m.class_method && m.name == "new" }.should_not be_nil
-    new_method.not_nil!.args.map(&.name).should eq(["name", "count"])
-    new_method.not_nil!.args.map(&.restriction).should eq(["String", "Int32"])
-    new_method.not_nil!.return_type.should eq("WithArgs")
+    new_method = with_args.methods.find { |method_node| method_node.class_method && method_node.name == "new" }.should_not be_nil
+    new_method.unwrap!.args.map(&.name).should eq(["name", "count"])
+    new_method.unwrap!.args.map(&.restriction).should eq(["String", "Int32"])
+    new_method.unwrap!.return_type.should eq("WithArgs")
 
-    bare_new = index.types["Bare"].not_nil!.methods.find { |m| m.class_method && m.name == "new" }
+    bare_new = (index.types["Bare"]? || raise "Expected Bare type not to be nil").methods.find { |method_node| method_node.class_method && method_node.name == "new" }
     bare_new.should_not be_nil
-    bare_new.not_nil!.args.should be_empty
+    bare_new.unwrap!.args.should be_empty
   end
 
   it "records getter-backed ivars with their restrictions" do
@@ -397,18 +398,18 @@ describe Crystalline::Lightweight::Index do
     store = index.types["Store"]?.should_not be_nil
 
     get = store.methods.find(&.name.==("get")).should_not be_nil
-    get.not_nil!.return_type.should eq("Crystal::Compiler::Result | ::Nil")
+    get.unwrap!.return_type.should eq("Crystal::Compiler::Result | ::Nil")
 
     name = store.methods.find(&.name.==("name")).should_not be_nil
-    name.not_nil!.return_type.should eq("String")
+    name.unwrap!.return_type.should eq("String")
 
     count = store.methods.find(&.name.==("count")).should_not be_nil
-    count.not_nil!.return_type.should eq("Int32")
+    count.unwrap!.return_type.should eq("Int32")
 
     empty = store.methods.find(&.name.==("empty")).should_not be_nil
-    empty.not_nil!.return_type.should eq("Bool")
+    empty.unwrap!.return_type.should eq("Bool")
 
     make = store.methods.find(&.name.==("make")).should_not be_nil
-    make.not_nil!.return_type.should eq("Foo")
+    make.unwrap!.return_type.should eq("Foo")
   end
 end

@@ -48,65 +48,67 @@ class Crystalline::CompletionContext
     in_interpolation = (interp = @line.rindex("\#{", @cursor)) && !@line[interp + 2, @cursor - interp - 2].includes?('}')
     return if !in_interpolation && (inside_comment?(tokens) || inside_delimited_literal?(tokens))
 
-    trigger = @trigger_character
-    if trigger.nil? || trigger.matches?(/\A[A-Za-z]\z/) || trigger == "_"
-      # Clients register the identifier characters as completion triggers
-      # (per-keystroke completions), so typing `foo.a` arrives with
-      # trigger "a" — but the receiver is still `foo`, and the analysis
-      # must end at the trigger dot (or `::`/sigil) or the method list is
-      # replaced by plain context items. Infer the structural trigger from
-      # the line when the reported one is an identifier character.
-      if inferred = inferred_trigger(tokens, fragment_start)
-        @trigger_character = inferred
-      end
-    end
-
-    case @trigger_character
-    when "."
-      if operator = preceding_period(tokens, fragment_start)
-        @analysis_column = operator.start_char
-        @replace_start = operator.end_char
-      elsif fragment_start > 0 && @line[fragment_start - 1] == '.'
-        # The tokenizer could not identify the period (mid-edit lexer
-        # failures on regex/string-heavy lines): the character before
-        # the fragment is still the trigger, so the analysis prefix
-        # must end there — otherwise the fragment is dragged into the
-        # receiver chain (`foo.scan(/x/).placeholde`) and resolution
-        # fails on it.
-        @analysis_column = fragment_start - 1
-        @replace_start = fragment_start
-      end
-    when ":"
-      if operator = preceding_colon_colon(tokens, fragment_start)
-        @analysis_column = operator.start_char
-        @replace_start = operator.end_char
-      end
-    when "@"
-      # The replace range covers the sigil (`@documents_`), so the edit
-      # text carries the full name and VSCode's filter word matches the
-      # filterText as a clean prefix. The range ends at the cursor: the
-      # fixer may have appended a placeholder name to the sigil, which the
-      # user has not typed.
-      if sigil = current_sigiled_token(tokens)
-        @analysis_column = sigil.start_char
-        @replace_start = sigil.start_char
-        @replace_end = @cursor
-      elsif @cursor > 1 && @line[@cursor - 2, 2]? == "@@"
-        @analysis_column = @cursor - 2
-        @replace_start = @cursor - 2
-        @replace_end = @cursor
-      elsif @cursor > 0 && @line[@cursor - 1] == '@'
-        @analysis_column = @cursor - 1
-        @replace_start = @cursor - 1
-        @replace_end = @cursor
-      end
-    else
-      @analysis_column = @cursor
-    end
+    infer_trigger(tokens, fragment_start)
+    adjust_for_trigger(tokens, fragment_start)
 
     self
   rescue Crystal::SyntaxException
     nil
+  end
+
+  private def infer_trigger(tokens : Array(TokenSpan), fragment_start : Int32)
+    trigger = @trigger_character
+    if trigger.nil? || trigger.matches?(/\A[A-Za-z]\z/) || trigger == "_"
+      if inferred = inferred_trigger(tokens, fragment_start)
+        @trigger_character = inferred
+      end
+    end
+  end
+
+  private def adjust_for_trigger(tokens : Array(TokenSpan), fragment_start : Int32)
+    case @trigger_character
+    when "."
+      adjust_for_period_trigger(tokens, fragment_start)
+    when ":"
+      adjust_for_colon_trigger(tokens, fragment_start)
+    when "@"
+      adjust_for_sigil_trigger(tokens)
+    else
+      @analysis_column = @cursor
+    end
+  end
+
+  private def adjust_for_period_trigger(tokens : Array(TokenSpan), fragment_start : Int32)
+    if operator = preceding_period(tokens, fragment_start)
+      @analysis_column = operator.start_char
+      @replace_start = operator.end_char
+    elsif fragment_start > 0 && @line[fragment_start - 1] == '.'
+      @analysis_column = fragment_start - 1
+      @replace_start = fragment_start
+    end
+  end
+
+  private def adjust_for_colon_trigger(tokens : Array(TokenSpan), fragment_start : Int32)
+    if operator = preceding_colon_colon(tokens, fragment_start)
+      @analysis_column = operator.start_char
+      @replace_start = operator.end_char
+    end
+  end
+
+  private def adjust_for_sigil_trigger(tokens : Array(TokenSpan))
+    if sigil = current_sigiled_token(tokens)
+      @analysis_column = sigil.start_char
+      @replace_start = sigil.start_char
+      @replace_end = @cursor
+    elsif @cursor > 1 && @line[@cursor - 2, 2]? == "@@"
+      @analysis_column = @cursor - 2
+      @replace_start = @cursor - 2
+      @replace_end = @cursor
+    elsif @cursor > 0 && @line[@cursor - 1] == '@'
+      @analysis_column = @cursor - 1
+      @replace_start = @cursor - 1
+      @replace_end = @cursor
+    end
   end
 
   def analysis_prefix : String
@@ -206,12 +208,7 @@ class Crystalline::CompletionContext
   end
 
   private def inferred_trigger(tokens : Array(TokenSpan), fragment_start : Int32)
-    if token = current_sigiled_token(tokens)
-      return "@" if token.type.instance_var? || token.type.class_var?
-    elsif @cursor > 0 && @line[@cursor - 1] == '@'
-      return "@"
-    end
-
+    return "@" if current_sigiled_token(tokens) || (@cursor > 0 && @line[@cursor - 1] == '@')
     return "." if preceding_period(tokens, fragment_start)
     return ":" if preceding_colon_colon(tokens, fragment_start)
 

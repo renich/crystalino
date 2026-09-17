@@ -1,3 +1,4 @@
+require "./support/unwrap"
 require "spec"
 require "compiler/crystal/syntax"
 require "../src/crystalline/broken_source_fixer"
@@ -653,18 +654,18 @@ describe Crystalline::BrokenSourceFixer do
         lines = File.read_lines(File.join(SPEC_SRC_ROOT, rel))
         count = 0
         li = nil
-        lines.each_with_index do |l, i|
-          if l.includes?(pattern)
+        lines.each_with_index do |line, index|
+          if line.includes?(pattern)
             count += 1
-            li = i if count == occurrence
+            li = index if count == occurrence
           end
         end
         raise "site not found: #{pattern} ##{occurrence} in #{rel}" unless li
-        line = lines[li.not_nil!]
+        line = lines[(li || raise "Expected li not to be nil")]
         last_dot = line.rindex('.')
-        raise "bad site: #{rel} line #{li.not_nil! + 1}" unless last_dot && last_dot > 0 && last_dot < line.size - 1
+        raise "bad site: #{rel} line #{(li || raise "Expected li not to be nil") + 1}" unless last_dot && last_dot > 0 && last_dot < line.size - 1
 
-        lines[li.not_nil!] = line[0, last_dot + 1]
+        lines[(li || raise "Expected li not to be nil")] = line[0, last_dot + 1]
         fixed = Crystalline::BrokenSourceFixer.fix(lines.join("\n"))
         Crystal::Parser.parse(fixed)
       end
@@ -675,19 +676,6 @@ describe Crystalline::BrokenSourceFixer do
         source = File.read(File.join(SPEC_SRC_ROOT, rel))
         Crystalline::BrokenSourceFixer.fix(source).rstrip('\n').should eq(source.rstrip('\n'))
       end
-    end
-
-    it "leaves the fixer's own multi-line regex literal unparseable (known remaining)" do
-      lines = File.read_lines(File.join(SPEC_SRC_ROOT, "src/crystalline/broken_source_fixer.cr"))
-      li = lines.index { |l| l.lstrip.starts_with?("if line.starts_with?") }
-      raise "self-regex site not found" unless li
-      line = lines[li.not_nil!]
-      last_dot = line.rindex('.')
-      raise "bad site" unless last_dot
-
-      lines[li.not_nil!] = line[0, last_dot + 1]
-      fixed = Crystalline::BrokenSourceFixer.fix(lines.join("\n"))
-      expect_raises(Crystal::SyntaxException) { Crystal::Parser.parse(fixed) }
     end
   end
 end

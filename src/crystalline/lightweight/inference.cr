@@ -137,236 +137,306 @@ module Crystalline::Lightweight
       end
     end
 
-    private def process_node(node : Crystal::ASTNode, *, apply_cursor_bounds = true)
+    private def process_node_calls(node : Crystal::ASTNode, apply_cursor_bounds : Bool) : Bool
       case node
-      when Crystal::Expressions
-        return unless !apply_cursor_bounds || starts_before_or_at_cursor?(node)
-
-        node.expressions.each do |expression|
-          break if apply_cursor_bounds && !starts_before_or_at_cursor?(expression)
-          process_node(expression, apply_cursor_bounds: apply_cursor_bounds)
-        end
-      when Crystal::Assign
-        if contains_cursor?(node.value)
-          # The cursor sits inside the value (e.g. a proc literal whose
-          # body is being edited): record the assignment like the plain
-          # path would, then descend so the inner blocks seed.
-          types = infer_types(node.value)
-          record_assignment_types(node.target, types) unless types.empty?
-          process_node(node.value, apply_cursor_bounds: apply_cursor_bounds)
-          return
-        end
-
-        return unless !apply_cursor_bounds || before_cursor?(node)
-
-        types = infer_types(node.value)
-        return if types.empty?
-
-        record_assignment_types(node.target, types)
-      when Crystal::And, Crystal::Or
-        # `cond && (x = expr)` assigns inside the condition: process both
-        # operands so the assignment is recorded like any other statement.
-        # (Parenthesized expressions are plain `Expressions` nodes.)
-        return unless !apply_cursor_bounds || starts_before_or_at_cursor?(node)
-
-        process_node(node.left, apply_cursor_bounds: apply_cursor_bounds)
-        process_node(node.right, apply_cursor_bounds: apply_cursor_bounds)
-      when Crystal::OpAssign
-        # `x ||= expr` (often a `||= begin ... end` block): record the
-        # assignment like a plain one, and walk the value so locals
-        # assigned inside the begin-block are typed.
-        if contains_cursor?(node.value)
-          process_node(node.value, apply_cursor_bounds: apply_cursor_bounds)
-          return
-        end
-
-        return unless !apply_cursor_bounds || before_cursor?(node)
-
-        process_node(node.value, apply_cursor_bounds: apply_cursor_bounds)
-        types = infer_types(node.value)
-        return if types.empty?
-
-        case target = node.target
-        when Crystal::Var
-          @local_types[target.name] = types
-        when Crystal::InstanceVar
-          @instance_var_types[target.name] = types
-        when Crystal::ClassVar
-          @class_var_types[target.name] = types
-        end
-      when Crystal::TypeDeclaration
-        # `@pending : Array({String, Int32}) = ...` — an ivar/cvar declared
-        # with a restriction (and often an initializer). Type it from the
-        # initializer when present, falling back to the restriction. A
-        # nil-only initializer (`@cache : Hash(...)? = nil`) still carries
-        # the restriction's real type.
-        if apply_cursor_bounds
-          if value = node.value
-            if contains_cursor?(value)
-              # The cursor sits inside the initializer (e.g. a block value
-              # like `Thread.new do ... end`): descend so locals assigned
-              # in the block type, then record the declaration itself.
-              process_node(value, apply_cursor_bounds: apply_cursor_bounds)
-            end
-          end
-        end
-        types = node.value.try { |value| infer_types(value) } || [] of String
-        if node.declared_type
-          restriction_types = resolve_type_names(node.declared_type.to_s)
-          if types.empty? || (types.all?(&.==("Nil")) && restriction_types.any?)
-            types = restriction_types
-          end
-        end
-        return if types.empty?
-
-        case var = node.var
-        when Crystal::Var
-          # A local type declaration (`t : Crystal::Type?`): type it from
-          # the restriction so later receivers resolve.
-          @local_types[var.name] = types
-        when Crystal::InstanceVar
-          @instance_var_types[var.name] = types
-        when Crystal::ClassVar
-          @class_var_types[var.name] = types
-        end
-      when Crystal::MultiAssign
-        if apply_cursor_bounds && node.values.any? { |value| contains_cursor?(value) }
-          node.values.each do |value|
-            process_node(value, apply_cursor_bounds: true) if contains_cursor?(value)
-          end
-          return
-        end
-
-        return unless !apply_cursor_bounds || before_cursor?(node)
-
-        assign_multi_types(node)
-      when Crystal::TupleLiteral
-        # A tuple literal as a statement (`{ query.top_level_methods.select
-        # {...}.flat_map {...}, false }`): descend into the elements so a
-        # cursor inside a chain nested in the tuple still seeds block args.
-        return unless !apply_cursor_bounds || starts_before_or_at_cursor?(node)
-
-        node.elements.each do |element|
-          break if apply_cursor_bounds && !starts_before_or_at_cursor?(element)
-          process_node(element, apply_cursor_bounds: apply_cursor_bounds)
-        end
       when Crystal::Call
-        # The untyped-arg seed's pending call sites live inside this
-        # caller: infer their values with the state at the call (one
-        # bounded walk per caller instead of one per call site).
-        if pending = @pending_call_sites
-          if (current_caller = @pending_caller) && (pending_calls = pending[current_caller]?)
-            if pending_calls.includes?(node) && (definition_p = @pending_definition) && (untyped_p = @pending_untyped) && (types_p = @pending_types)
-              collect_call_site_value_types(node, definition_p, untyped_p, types_p)
-            end
-          end
-        end
-        # Descend when the cursor sits anywhere inside the call: its
-        # block (whose `&.`-chained form may lack an end location), its
-        # `&->` proc pointer, its object (`x.join { ... }` wraps the
-        # block-carrying receiver), or one of its arguments.
-        return unless !apply_cursor_bounds || before_cursor?(node) ||
-                      node.block.try { |block| block_contains_cursor?(block) } ||
-                      node.block_arg.try { |block_arg| contains_cursor?(block_arg) } ||
-                      node.obj.try { |object| contains_cursor?(object) } ||
-                      (node.args + (node.named_args || [] of Crystal::NamedArgument)).any? { |arg| contains_cursor?(arg) }
-
-        process_call(node, apply_cursor_bounds: apply_cursor_bounds)
+        process_call_node(node, apply_cursor_bounds: apply_cursor_bounds)
       when Crystal::NamedArgument
-        # `foo(name: expr)` — the walk descends into the value like a
-        # positional argument.
-        return unless !apply_cursor_bounds || contains_cursor?(node.value)
-
-        process_node(node.value, apply_cursor_bounds: apply_cursor_bounds)
+        process_named_argument(node, apply_cursor_bounds: apply_cursor_bounds)
       when Crystal::Return
-        # `return unless (x = expr)` still assigns x before returning:
-        # process the returned expression like any other statement.
-        return unless !apply_cursor_bounds || starts_before_or_at_cursor?(node)
+        process_return(node, apply_cursor_bounds: apply_cursor_bounds)
+      when Crystal::ProcLiteral
+        process_proc_literal(node, apply_cursor_bounds: apply_cursor_bounds)
+      when Crystal::UninitializedVar
+        process_uninitialized_var(node, apply_cursor_bounds: apply_cursor_bounds)
+      else
+        return false
+      end
+      true
+    end
 
-        node.exp.try { |exp| process_node(exp, apply_cursor_bounds: apply_cursor_bounds) }
+    private def process_node_control_flow(node : Crystal::ASTNode, apply_cursor_bounds : Bool) : Bool
+      return true if process_node_branches(node, apply_cursor_bounds)
+      return true if process_node_loops_and_handlers(node, apply_cursor_bounds)
+      false
+    end
+
+    private def process_node_branches(node : Crystal::ASTNode, apply_cursor_bounds : Bool) : Bool
+      case node
+      when Crystal::If, Crystal::Unless, Crystal::Case
+        return true if apply_cursor_bounds && !starts_before_or_at_cursor?(node)
+      when Crystal::Select
+        # proceed
+      else
+        return false
+      end
+
+      case node
       when Crystal::If
-        return unless !apply_cursor_bounds || starts_before_or_at_cursor?(node)
-
         process_if(node, apply_cursor_bounds: apply_cursor_bounds)
       when Crystal::Unless
-        return unless !apply_cursor_bounds || starts_before_or_at_cursor?(node)
-
         process_unless(node, apply_cursor_bounds: apply_cursor_bounds)
       when Crystal::Case
-        return unless !apply_cursor_bounds || starts_before_or_at_cursor?(node)
-
         process_case(node, apply_cursor_bounds: apply_cursor_bounds)
-      when Crystal::ProcLiteral
-        # `walker = ->(current : Crystal::ASTNode, ...) do ... end`:
-        # seed the parameter restrictions and walk the body like a def.
-        return unless !apply_cursor_bounds || starts_before_or_at_cursor?(node)
+      when Crystal::Select
+        process_select(node, apply_cursor_bounds: apply_cursor_bounds)
+      end
+      true
+    end
 
-        proc_def = node.def
-        proc_def.args.each do |arg|
-          next unless restriction = arg.restriction
-          @local_types[arg.name] = resolve_type_names(restriction.to_s)
-        end
-        process_node(proc_def.body, apply_cursor_bounds: apply_cursor_bounds)
-      when Crystal::UninitializedVar
-        # `walker = uninitialized Proc(...)` parses directly as an
-        # UninitializedVar statement (no Assign wrapper): type the
-        # declared local so proc-typed receivers resolve.
-        return unless !apply_cursor_bounds || before_cursor?(node)
+    private def process_node_loops_and_handlers(node : Crystal::ASTNode, apply_cursor_bounds : Bool) : Bool
+      case node
+      when Crystal::While, Crystal::Until, Crystal::ExceptionHandler, Crystal::MacroIf
+        return true if apply_cursor_bounds && !starts_before_or_at_cursor?(node)
+      else
+        return false
+      end
 
-        if var = node.var.as?(Crystal::Var)
-          @local_types[var.name] = [node.declared_type.to_s]
-        end
+      case node
       when Crystal::While
-        return unless !apply_cursor_bounds || starts_before_or_at_cursor?(node)
-
         process_loop(node.cond, node.body, apply_cursor_bounds: apply_cursor_bounds)
       when Crystal::Until
-        return unless !apply_cursor_bounds || starts_before_or_at_cursor?(node)
-
         process_loop(node.cond, node.body, apply_cursor_bounds: apply_cursor_bounds)
-      when Crystal::Select
-        return unless !apply_cursor_bounds || starts_before_or_at_cursor?(node)
-
-        node.whens.each do |when_node|
-          when_node.conds.each { |cond| process_node(cond, apply_cursor_bounds: apply_cursor_bounds) }
-          process_node(when_node.body, apply_cursor_bounds: apply_cursor_bounds)
-        end
-        node.else.try { |else_node| process_node(else_node, apply_cursor_bounds: apply_cursor_bounds) }
       when Crystal::ExceptionHandler
-        return unless !apply_cursor_bounds || starts_before_or_at_cursor?(node)
-
         process_exception_handler(node, apply_cursor_bounds: apply_cursor_bounds)
       when Crystal::MacroIf
-        # `{% if %}` / `{% else %}` branches are raw macro text: reparse
-        # and walk both so locals assigned behind a compile-time flag
-        # (`{% if flag?(:preview_mt) %}` scheduler/fiber code) type the
-        # same as plain statements.
-        return unless !apply_cursor_bounds || starts_before_or_at_cursor?(node)
-
         process_macro_if(node, apply_cursor_bounds: apply_cursor_bounds)
-      else
-        return unless !apply_cursor_bounds || before_cursor?(node)
       end
+      true
+    end
+
+    private def process_node(node : Crystal::ASTNode, *, apply_cursor_bounds = true)
+      return if process_node_expressions_and_assigns(node, apply_cursor_bounds)
+      return if process_node_calls(node, apply_cursor_bounds)
+      return if process_node_control_flow(node, apply_cursor_bounds)
+
+      return if apply_cursor_bounds && !before_cursor?(node)
+    end
+
+    private def process_node_expressions_and_assigns(node : Crystal::ASTNode, apply_cursor_bounds : Bool) : Bool
+      case node
+      when Crystal::Expressions
+        process_expressions(node, apply_cursor_bounds: apply_cursor_bounds)
+      when Crystal::Assign
+        process_assign(node, apply_cursor_bounds: apply_cursor_bounds)
+      when Crystal::And, Crystal::Or
+        process_logical(node, apply_cursor_bounds: apply_cursor_bounds)
+      when Crystal::OpAssign
+        process_op_assign(node, apply_cursor_bounds: apply_cursor_bounds)
+      when Crystal::TypeDeclaration
+        process_type_declaration(node, apply_cursor_bounds: apply_cursor_bounds)
+      when Crystal::MultiAssign
+        process_multi_assign(node, apply_cursor_bounds: apply_cursor_bounds)
+      when Crystal::TupleLiteral
+        process_tuple_literal(node, apply_cursor_bounds: apply_cursor_bounds)
+      else
+        return false
+      end
+      true
+    end
+
+    private def process_expressions(node : Crystal::Expressions, *, apply_cursor_bounds : Bool)
+      return if apply_cursor_bounds && !starts_before_or_at_cursor?(node)
+
+      node.expressions.each do |expression|
+        break if apply_cursor_bounds && !starts_before_or_at_cursor?(expression)
+        process_node(expression, apply_cursor_bounds: apply_cursor_bounds)
+      end
+    end
+
+    private def process_assign(node : Crystal::Assign, *, apply_cursor_bounds : Bool)
+      if contains_cursor?(node.value)
+        types = infer_types(node.value)
+        record_assignment_types(node.target, types) unless types.empty?
+        process_node(node.value, apply_cursor_bounds: apply_cursor_bounds)
+        return
+      end
+
+      return if apply_cursor_bounds && !before_cursor?(node)
+
+      types = infer_types(node.value)
+      return if types.empty?
+
+      record_assignment_types(node.target, types)
+    end
+
+    private def process_logical(node : Crystal::And | Crystal::Or, *, apply_cursor_bounds : Bool)
+      return if apply_cursor_bounds && !starts_before_or_at_cursor?(node)
+
+      process_node(node.left, apply_cursor_bounds: apply_cursor_bounds)
+      process_node(node.right, apply_cursor_bounds: apply_cursor_bounds)
+    end
+
+    private def process_op_assign(node : Crystal::OpAssign, *, apply_cursor_bounds : Bool)
+      if contains_cursor?(node.value)
+        process_node(node.value, apply_cursor_bounds: apply_cursor_bounds)
+        return
+      end
+
+      return if apply_cursor_bounds && !before_cursor?(node)
+
+      process_node(node.value, apply_cursor_bounds: apply_cursor_bounds)
+      types = infer_types(node.value)
+      return if types.empty?
+
+      case target = node.target
+      when Crystal::Var
+        @local_types[target.name] = types
+      when Crystal::InstanceVar
+        @instance_var_types[target.name] = types
+      when Crystal::ClassVar
+        @class_var_types[target.name] = types
+      end
+    end
+
+    private def process_type_declaration(node : Crystal::TypeDeclaration, *, apply_cursor_bounds : Bool)
+      if apply_cursor_bounds && (value = node.value) && contains_cursor?(value)
+        process_node(value, apply_cursor_bounds: apply_cursor_bounds)
+      end
+
+      types = resolve_type_declaration_types(node)
+      return if types.empty?
+
+      case var = node.var
+      when Crystal::Var
+        @local_types[var.name] = types
+      when Crystal::InstanceVar
+        @instance_var_types[var.name] = types
+      when Crystal::ClassVar
+        @class_var_types[var.name] = types
+      end
+    end
+
+    private def resolve_type_declaration_types(node : Crystal::TypeDeclaration) : Array(String)
+      types = node.value.try { |value| infer_types(value) } || [] of String
+      if node.declared_type
+        restriction_types = resolve_type_names(node.declared_type.to_s)
+        if types.empty? || (types.all?(&.==("Nil")) && !restriction_types.empty?)
+          types = restriction_types
+        end
+      end
+      types
+    end
+
+    private def process_multi_assign(node : Crystal::MultiAssign, *, apply_cursor_bounds : Bool)
+      if apply_cursor_bounds && node.values.any? { |value| contains_cursor?(value) }
+        node.values.each do |value|
+          process_node(value, apply_cursor_bounds: true) if contains_cursor?(value)
+        end
+        return
+      end
+
+      return if apply_cursor_bounds && !before_cursor?(node)
+
+      assign_multi_types(node)
+    end
+
+    private def process_tuple_literal(node : Crystal::TupleLiteral, *, apply_cursor_bounds : Bool)
+      return if apply_cursor_bounds && !starts_before_or_at_cursor?(node)
+
+      node.elements.each do |element|
+        break if apply_cursor_bounds && !starts_before_or_at_cursor?(element)
+        process_node(element, apply_cursor_bounds: apply_cursor_bounds)
+      end
+    end
+
+    private def process_call_node(node : Crystal::Call, *, apply_cursor_bounds : Bool)
+      process_pending_call_sites(node)
+      return if apply_cursor_bounds && !before_cursor?(node) && !call_contains_cursor?(node)
+
+      process_call(node, apply_cursor_bounds: apply_cursor_bounds)
+    end
+
+    private def process_pending_call_sites(node : Crystal::Call)
+      if pending = @pending_call_sites
+        if (current_caller = @pending_caller) && (pending_calls = pending[current_caller]?)
+          if pending_calls.includes?(node) && (definition_p = @pending_definition) && (untyped_p = @pending_untyped) && (types_p = @pending_types)
+            collect_call_site_value_types(node, definition_p, untyped_p, types_p)
+          end
+        end
+      end
+    end
+
+    private def call_contains_cursor?(node : Crystal::Call) : Bool
+      node.block.try { |block| block_contains_cursor?(block) } ||
+        node.block_arg.try { |block_arg| contains_cursor?(block_arg) } ||
+        node.obj.try { |object| contains_cursor?(object) } ||
+        (node.args + (node.named_args || [] of Crystal::NamedArgument)).any? { |arg| contains_cursor?(arg) }
+    end
+
+    private def process_named_argument(node : Crystal::NamedArgument, *, apply_cursor_bounds : Bool)
+      return if apply_cursor_bounds && !contains_cursor?(node.value)
+
+      process_node(node.value, apply_cursor_bounds: apply_cursor_bounds)
+    end
+
+    private def process_return(node : Crystal::Return, *, apply_cursor_bounds : Bool)
+      return if apply_cursor_bounds && !starts_before_or_at_cursor?(node)
+
+      node.exp.try { |exp| process_node(exp, apply_cursor_bounds: apply_cursor_bounds) }
+    end
+
+    private def process_proc_literal(node : Crystal::ProcLiteral, *, apply_cursor_bounds : Bool)
+      return if apply_cursor_bounds && !starts_before_or_at_cursor?(node)
+
+      proc_def = node.def
+      proc_def.args.each do |arg|
+        next unless restriction = arg.restriction
+        @local_types[arg.name] = resolve_type_names(restriction.to_s)
+      end
+      process_node(proc_def.body, apply_cursor_bounds: apply_cursor_bounds)
+    end
+
+    private def process_uninitialized_var(node : Crystal::UninitializedVar, *, apply_cursor_bounds : Bool)
+      return if apply_cursor_bounds && !before_cursor?(node)
+
+      if var = node.var.as?(Crystal::Var)
+        @local_types[var.name] = [node.declared_type.to_s]
+      end
+    end
+
+    private def process_select(node : Crystal::Select, *, apply_cursor_bounds : Bool)
+      return if apply_cursor_bounds && !starts_before_or_at_cursor?(node)
+
+      node.whens.each do |when_node|
+        when_node.conds.each { |cond| process_node(cond, apply_cursor_bounds: apply_cursor_bounds) }
+        process_node(when_node.body, apply_cursor_bounds: apply_cursor_bounds)
+      end
+      node.else.try { |else_node| process_node(else_node, apply_cursor_bounds: apply_cursor_bounds) }
     end
 
     private def infer_types(node : Crystal::ASTNode) : Array(String)
       case node
+      when Crystal::Expressions, Crystal::ExceptionHandler, Crystal::ProcLiteral, Crystal::ProcPointer, Crystal::UninitializedVar
+        infer_types_for_blocks_and_procs(node)
+      when Crystal::Var, Crystal::InstanceVar, Crystal::ClassVar, Crystal::Self
+        infer_types_for_vars(node)
+      when Crystal::Path, Crystal::Generic
+        infer_types_for_paths(node)
+      when Crystal::NilLiteral, Crystal::BoolLiteral, Crystal::CharLiteral, Crystal::StringLiteral, Crystal::NumberLiteral
+        infer_types_for_primitives(node)
+      when Crystal::ArrayLiteral, Crystal::HashLiteral, Crystal::NamedTupleLiteral, Crystal::TupleLiteral
+        infer_types_for_collections(node)
+      when Crystal::Call
+        infer_call_types(node)
+      when Crystal::Cast, Crystal::NilableCast
+        infer_types_for_casts(node)
+      when Crystal::If, Crystal::Unless, Crystal::Case, Crystal::Or, Crystal::And
+        infer_types_for_control_flow(node)
+      else
+        [] of String
+      end
+    end
+
+    private def infer_types_for_blocks_and_procs(node : Crystal::ASTNode) : Array(String)
+      case node
       when Crystal::Expressions
-        # Parenthesized expressions: the value is the last expression.
         node.expressions.last?.try { |last| infer_expression_result_types(last) } || [] of String
       when Crystal::ExceptionHandler
-        # `x = begin ... rescue ... end` types from the body's value.
         infer_expression_result_types(node.body)
       when Crystal::UninitializedVar
-        # `x = uninitialized Proc(A, B, R)` declares the variable's
-        # type: use the declared type name so proc-typed locals
-        # (`walker.call`) resolve.
         [node.declared_type.to_s]
       when Crystal::ProcLiteral
-        # `x = ->(a : T, b : U) do ... end` — the literal's signature
-        # names the proc type, so proc-typed locals resolve. The params
-        # and body are proc-local: derive the body's value on a saved
-        # state so nothing leaks into the enclosing scope.
         proc_def = node.def
         inputs = proc_def.args.compact_map do |arg|
           arg.restriction.try(&.to_s)
@@ -374,28 +444,34 @@ module Crystalline::Lightweight
         output = proc_literal_output_types(node).first? || "Nil"
         ["Proc(#{inputs.join(", ")}, #{output})"]
       when Crystal::ProcPointer
-        # `x.try &->URI.parse(String)` — the `&->` form passes a proc
-        # pointer (not a block): its value is the pointed-to method's
-        # return type (`URI.parse` returns `URI`).
-        if (object = node.obj) && (type_name = type_expression_name(object))
-          if resolved = @query.resolve_type_name(type_name, namespace: @current_type_name)
-            @query.methods_named(resolved, node.name, class_method: true).each do |method|
-              if return_type = method.return_type
-                expanded = TypeUtils.expand_type_names(return_type).map { |t| t == "self" ? method.owner : t }
-                return resolve_type_names(expanded, method.owner).uniq
-              end
+        infer_proc_pointer_types(node)
+      else
+        [] of String
+      end
+    end
+
+    private def infer_proc_pointer_types(node : Crystal::ProcPointer) : Array(String)
+      if (object = node.obj) && (type_name = type_expression_name(object))
+        if resolved = @query.resolve_type_name(type_name, namespace: @current_type_name)
+          @query.methods_named(resolved, node.name, class_method: true).each do |method|
+            if return_type = method.return_type
+              expanded = TypeUtils.expand_type_names(return_type).map { |resolved_t| resolved_t == "self" ? method.owner : resolved_t }
+              return resolve_type_names(expanded, method.owner).uniq
             end
           end
         end
-        [] of String
+      end
+      [] of String
+    end
+
+    private def infer_types_for_vars(node : Crystal::ASTNode) : Array(String)
+      case node
       when Crystal::Var
         if node.name == "self"
           self_types[0]
         else
           local_types = types_for(node.name)
           if local_types.empty? && (type_name = @current_type_name)
-            # A bare name may be a getter/method on the enclosing type
-            # (`handlers.each` where `handlers` is a `getter`).
             @query.methods_for(type_name, class_method: class_method_context?).each do |method|
               if method.name == node.name && (return_type = method.return_type)
                 local_types = resolve_type_names(TypeUtils.expand_type_names(return_type))
@@ -411,12 +487,26 @@ module Crystalline::Lightweight
         class_var_types_for(node.name)
       when Crystal::Self
         self_types[0]
+      else
+        [] of String
+      end
+    end
+
+    private def infer_types_for_paths(node : Crystal::ASTNode) : Array(String)
+      case node
       when Crystal::Path, Crystal::Generic
         if type_name = @query.resolve_type_name(node.to_s, namespace: @current_type_name)
           [type_name]
         else
           [] of String
         end
+      else
+        [] of String
+      end
+    end
+
+    private def infer_types_for_primitives(node : Crystal::ASTNode) : Array(String)
+      case node
       when Crystal::NilLiteral
         ["Nil"]
       when Crystal::BoolLiteral
@@ -427,17 +517,37 @@ module Crystalline::Lightweight
         ["String"]
       when Crystal::NumberLiteral
         [number_kind_name(node.kind)]
+      else
+        [] of String
+      end
+    end
+
+    private def infer_types_for_collections(node : Crystal::ASTNode) : Array(String)
+      case node
       when Crystal::ArrayLiteral
         infer_array_literal_types(node)
       when Crystal::HashLiteral
         infer_hash_literal_types(node)
       when Crystal::NamedTupleLiteral
         infer_named_tuple_literal_types(node)
-      when Crystal::Call
-        infer_call_types(node)
+      when Crystal::TupleLiteral
+        tuple_part_types = node.elements.map do |element|
+          element_types = infer_types(element)
+          next nil if element_types.empty?
+          join_union_types(element_types)
+        end
+        resolved_parts = tuple_part_types.compact
+        return ["Tuple"] if resolved_parts.empty?
+
+        ["Tuple(#{resolved_parts.join(", ")})"]
+      else
+        [] of String
+      end
+    end
+
+    private def infer_types_for_casts(node : Crystal::ASTNode) : Array(String)
+      case node
       when Crystal::Cast, Crystal::NilableCast
-        # `x.as(T)` / `x.as?(T)` are compiler specials that parse as
-        # dedicated nodes: the target type names the result.
         target_name = node.to.to_s
         base = TypeUtils.split_top_level(target_name, '|').reject(&.==("Nil")).reject(&.==("::Nil")).first?
         if base
@@ -448,8 +558,14 @@ module Crystalline::Lightweight
           end
         end
         [] of String
+      else
+        [] of String
+      end
+    end
+
+    private def infer_types_for_control_flow(node : Crystal::ASTNode) : Array(String)
+      case node
       when Crystal::If, Crystal::Unless
-        # `x = if cond then a else b end` — the value is the branches' merge.
         branch_types = [] of String
         branch_types.concat(node.then.try { |branch| infer_expression_result_types(branch) } || [] of String)
         branch_types.concat(node.else.try { |branch| infer_expression_result_types(branch) } || [] of String)
@@ -465,19 +581,6 @@ module Crystalline::Lightweight
         infer_or_types(node)
       when Crystal::And
         infer_and_types(node)
-      when Crystal::TupleLiteral
-        tuple_part_types = node.elements.map do |element|
-          element_types = infer_types(element)
-          next nil if element_types.empty?
-          join_union_types(element_types)
-        end
-        resolved_parts = tuple_part_types.compact
-        return ["Tuple"] if resolved_parts.empty?
-
-        # An unresolvable element drops out of the tuple type rather than
-        # collapsing the whole literal: `{a, b, c}` keeps typing `t[0]`
-        # when only `b` is unknown.
-        ["Tuple(#{resolved_parts.join(", ")})"]
       else
         [] of String
       end
@@ -539,9 +642,9 @@ module Crystalline::Lightweight
       end
 
       if apply_cursor_bounds
-        if object = node.obj
-          if contains_cursor?(object)
-            process_node(object, apply_cursor_bounds: true)
+        if call_obj = node.obj
+          if contains_cursor?(call_obj)
+            process_node(call_obj, apply_cursor_bounds: true)
             return
           end
         end
@@ -584,40 +687,13 @@ module Crystalline::Lightweight
       arg_types = block_argument_types(node, object_types)
       return [] of String if arg_types.empty?
 
-      # A single tuple element destructured into multiple block params
-      # (`map { |k, v| ... }` on `Array(Tuple(K, V))`): split the tuple's
-      # elements across the params.
-      if block.args.size > arg_types.size
-        if first = arg_types.first?
-          if first.size == 1
-            if tuple_parts = TypeUtils.tuple_element_types(first.first)
-              arg_types = tuple_parts
-            end
-          elsif first.size == block.args.size
-            # A destructured element delivered as one entry holding the
-            # per-arg types: split it across the params.
-            arg_types = first.map { |type_name| [type_name] }
-          end
-        end
-      end
+      arg_types = adjust_block_arg_types_for_destructuring(block.args.size, arg_types)
 
       names = [] of String
       block.args.each_with_index do |arg, index|
         types = arg_types[index]? || [] of String
         if arg.name.empty?
-          # `|(a, b)|` — a destructured block param: the parser gives it
-          # an empty name and keeps the sub-vars in `block.unpacks`.
-          # Split the tuple element types across the sub-params.
-          if unpacked = block.unpacks.try(&.[index]?)
-            sub_names = unpacked.expressions.compact_map { |exp| exp.as?(Crystal::Var).try(&.name) }
-            element_types = types.flat_map { |type_name| TypeUtils.tuple_element_types(type_name) || [] of Array(String) }
-            if !sub_names.empty? && sub_names.size == element_types.size
-              sub_names.each_with_index do |sub_name, sub_index|
-                @local_types[sub_name] = element_types[sub_index]
-                names << sub_name
-              end
-            end
-          end
+          names.concat(seed_unpacked_block_args(block, index, types))
         elsif !types.empty?
           @local_types[arg.name] = types.map { |type_name|
             @query.resolve_type_name(type_name, namespace: @current_type_name) || type_name
@@ -628,23 +704,64 @@ module Crystalline::Lightweight
       names
     end
 
-    private def block_argument_types(node : Crystal::Call, object_types : Array(String)? = nil) : Array(Array(String))
-      # A bare call (`each_direct_def(...) do |definition|`) resolves on
-      # the enclosing type: fall back to the self types as the receiver.
-      # The caller usually already typed the receiver (chains re-enter the
-      # sub-chain here otherwise): reuse it when passed.
-      object_types = object_types || (node.obj.try { |object| infer_types(object) } || self_types[0])
-      # The receiver type may be a union string (`Array(T) | ::Nil`):
-      # split it so each branch is matched structurally below.
-      object_types = object_types.flat_map { |t| TypeUtils.expand_type_names(t) }.uniq!
+    private def adjust_block_arg_types_for_destructuring(block_args_size : Int32, arg_types : Array(Array(String))) : Array(Array(String))
+      if block_args_size > arg_types.size
+        if first = arg_types.first?
+          if first.size == 1
+            if tuple_parts = TypeUtils.tuple_element_types(first.first)
+              return tuple_parts
+            end
+          elsif first.size == block_args_size
+            return first.map { |type_name| [type_name] }
+          end
+        end
+      end
+      arg_types
+    end
 
-      # The accumulator/object types depend on the call arguments, not
-      # just the receiver: these two stay name-keyed (the declaration
-      # `& : (U, T) -> U` cannot express the memo's type).
+    private def seed_unpacked_block_args(block : Crystal::Block, index : Int32, types : Array(String)) : Array(String)
+      names = [] of String
+      if unpacked = block.unpacks.try(&.[index]?)
+        sub_names = unpacked.expressions.compact_map { |exp| exp.as?(Crystal::Var).try(&.name) }
+        element_types = types.flat_map { |type_name| TypeUtils.tuple_element_types(type_name) || [] of Array(String) }
+        if !sub_names.empty? && sub_names.size == element_types.size
+          sub_names.each_with_index do |sub_name, sub_index|
+            @local_types[sub_name] = element_types[sub_index]
+            names << sub_name
+          end
+        end
+      end
+      names
+    end
+
+    private def block_argument_types(node : Crystal::Call, object_types : Array(String)? = nil) : Array(Array(String))
+      object_types = object_types || (node.obj.try { |object| infer_types(object) } || self_types[0])
+      object_types = object_types.flat_map { |type_name| TypeUtils.expand_type_names(type_name) }.uniq!
+
+      if special_types = special_block_argument_types(node, object_types)
+        return special_types
+      end
+
+      object_types.flat_map { |type_name| summary_block_argument_types(type_name, node.name) }
+    end
+
+    private def special_block_argument_types(node : Crystal::Call, object_types : Array(String)) : Array(Array(String))?
       if node.name == "reduce"
         return reduce_block_argument_types(node, object_types)
       end
 
+      if types = special_each_block_argument_types(node, object_types)
+        return types
+      end
+
+      if types = special_tap_block_argument_types(node, object_types)
+        return types
+      end
+
+      nil
+    end
+
+    private def special_tap_block_argument_types(node : Crystal::Call, object_types : Array(String)) : Array(Array(String))?
       if node.name == "each_with_object"
         element_types = array_block_argument_types(object_types).first?
         memo_types = node.args.first?.try { |arg| infer_types(arg) } || [] of String
@@ -652,17 +769,15 @@ module Crystalline::Lightweight
         return [element_types, memo_types]
       end
 
-      # `try`/`tap` yield the receiver itself (non-nil): only the call
-      # site knows the receiver's type.
       if node.name == "try" || node.name == "tap"
         return [] of Array(String) if object_types.empty?
         non_nil_types = object_types.reject(&.==("Nil")).uniq!
         return non_nil_types.empty? ? [] of Array(String) : [non_nil_types]
       end
+      nil
+    end
 
-      # `each_with_index(offset = 0, &)` / `each_char_with_index(offset = 0, &)`
-      # are declared without a block restriction: their shape cannot be
-      # derived, so they stay name-keyed.
+    private def special_each_block_argument_types(node : Crystal::Call, object_types : Array(String)) : Array(Array(String))?
       if node.name == "each_with_index" || node.name == "each_char_with_index"
         element_types = if node.name == "each_char_with_index"
                           char_types_for(object_types)
@@ -673,67 +788,70 @@ module Crystalline::Lightweight
         return [element_types, ["Int32"]]
       end
 
-      # `each_char(&)` on String yields Char.
       if node.name == "each_char"
         char_types = char_types_for(object_types)
         return [] of Array(String) unless char_types
         return [char_types]
       end
 
-      # Structural: yield contracts derived from the method's own block
-      # restriction (`map(& : T -> U)` on an element receiver yields the
-      # element). Covers each/map/select/reject/find/compact_map/flat_map/
-      # index_by/group_by/map_with_index/each_key/each_value and any
-      # other stdlib method whose declaration carries the shape.
-      object_types.flat_map { |type_name| summary_block_argument_types(type_name, node.name) }
+      nil
     end
 
     private def summary_block_argument_types(type_name : String, method_name : String) : Array(Array(String))
-      # A class-method call (`OptionParser.parse do |parser|`) records its
-      # contracts under class_method=true: query both views.
       contracts = (@query.method_contracts_for(type_name, method_name, class_method: false) +
                    @query.method_contracts_for(type_name, method_name, class_method: true)).uniq
       return [] of Array(String) if contracts.empty?
 
       block_types = [] of Array(String)
       contracts.each do |contract|
-        if contract.block_args.any?
+        if !contract.block_args.empty?
           block_types.concat(contract.block_args.map(&.dup))
           next
         end
 
-        # The receiver's own types substitute the declaration's vars
-        # (`Array(T)#map` yields the receiver's element, whatever T is).
-        case contract.kind
-        when .yield_self?
-          block_types << contract.types unless contract.types.empty?
-        when .yield_element?
-          if element_types = TypeUtils.enumerable_element_types(type_name)
-            block_types << element_types
-          end
-        when .yield_element_with_index?
-          if element_types = TypeUtils.enumerable_element_types(type_name)
-            block_types << element_types
-            block_types << ["Int32"]
-          end
-        when .yield_key?
-          if key_types = TypeUtils.hash_key_types(type_name)
-            block_types << key_types
-          end
-        when .yield_value?
-          if value_types = TypeUtils.hash_value_types(type_name)
-            block_types << value_types
-          end
-        when .yield_key_value?
-          if key_types = TypeUtils.hash_key_types(type_name)
-            if value_types = TypeUtils.hash_value_types(type_name)
-              block_types << key_types
-              block_types << value_types
-            end
-          end
+        if types = contract_block_types(type_name, contract)
+          block_types.concat(types)
         end
       end
       block_types
+    end
+
+    private def contract_block_types(type_name : String, contract : MethodContract) : Array(Array(String))?
+      case contract.kind
+      when .yield_self?
+        return [contract.types] unless contract.types.empty?
+      when .yield_element?
+        if element_types = TypeUtils.enumerable_element_types(type_name)
+          return [element_types]
+        end
+      when .yield_element_with_index?
+        if element_types = TypeUtils.enumerable_element_types(type_name)
+          return [element_types, ["Int32"]]
+        end
+      when .yield_key?, .yield_value?, .yield_key_value?
+        return contract_block_types_hash(type_name, contract)
+      end
+      nil
+    end
+
+    private def contract_block_types_hash(type_name : String, contract : MethodContract) : Array(Array(String))?
+      case contract.kind
+      when .yield_key?
+        if key_types = TypeUtils.hash_key_types(type_name)
+          return [key_types]
+        end
+      when .yield_value?
+        if value_types = TypeUtils.hash_value_types(type_name)
+          return [value_types]
+        end
+      when .yield_key_value?
+        if key_types = TypeUtils.hash_key_types(type_name)
+          if value_types = TypeUtils.hash_value_types(type_name)
+            return [key_types, value_types]
+          end
+        end
+      end
+      nil
     end
 
     private def array_block_argument_types(object_types : Array(String)) : Array(Array(String))
@@ -802,192 +920,179 @@ module Crystalline::Lightweight
 
     private def infer_call_types_inner(node : Crystal::Call) : Array(String)
       if node.name == "new"
-        if object = node.obj
-          if type_name = type_expression_name(object)
-            return [type_name] if @query.find_type(type_name)
-          end
-        elsif class_method_context?
-          # A bare `new` in a class method (`def self.from_program`):
-          # instantiates the enclosing type.
-          if (type_name = @current_type_name) && @query.find_type(type_name)
-            return [type_name]
-          end
-        end
+        types = infer_new_call_types(node)
+        return types unless types.empty?
       end
 
-      # The receiver's types are the base of every path below: compute
-      # them once. Re-inferring per path made long block-carrying chains
-      # (`a.map {...}.reject {...}.select {...}`) re-type the whole
-      # sub-chain at every level — quadratic-to-exponential per request.
       object_types = node.obj.try { |object| infer_types(object) } || [] of String
 
-      # `x.try { ... }` / `x.try &->URI.parse(String)`: the receiver is
-      # yielded to the block (or proc) and the call evaluates to the
-      # block's value or nil. The index records no return for Object#try,
-      # and Nil#try returns `self` (nil) — neither carries the block's
-      # value, so the call site derives it: non-nil receiver branches
-      # yield the block/proc result, the nil branch stays nil.
-      if node.name == "try" && !object_types.empty?
-        non_nil_types = object_types.reject(&.==("Nil")).uniq!
-        # `nil.try { ... }` never runs the block: the value is always nil.
-        return ["Nil"] if non_nil_types.empty?
-        block_types = if block = node.block
-                        infer_block_result_types(node, block, object_types)
-                      elsif block_arg = node.block_arg
-                        case block_arg
-                        when Crystal::ProcLiteral
-                          proc_literal_output_types(block_arg)
-                        else
-                          infer_types(block_arg)
-                        end
-                      else
-                        [] of String
-                      end
-        # `try` is declared `: U?` — the block's value or nil even when
-        # the receiver itself is non-nil.
-        return (block_types + ["Nil"]).uniq unless block_types.empty?
+      if special_types = infer_call_types_inner_special(node, object_types)
+        return special_types
       end
 
-      # `File.open(..., &)`-style methods declare a bare `&` (no typed
-      # block restriction) and the no-block overload's `: self` return
-      # wins the index merge — but with a block they yield and return
-      # the block's value (`shards_yaml = File.open(path) do |file| ... end`
-      # is the opened file's parse, not the File itself). When the call
-      # has a block, no overload carries a typed block restriction, and
-      # the recorded return is the receiver itself, the block result is
-      # the value.
-      if (block = node.block) && node.name != "new"
-        unless object_types.empty?
-          methods = object_types.flat_map do |type_name|
-            @query.methods_named(type_name, node.name, class_method: false) +
-              @query.methods_named(type_name, node.name, class_method: true)
+      if node.obj
+        types = infer_object_call_types(node, object_types)
+      else
+        types = infer_bare_call_types(node)
+      end
+
+      if types.empty?
+        types = fallback_call_types(node, object_types)
+      end
+
+      types.uniq!
+      types
+    end
+
+    private def infer_call_types_inner_special(node : Crystal::Call, object_types : Array(String)) : Array(String)?
+      if node.name == "try" && !object_types.empty?
+        types = infer_try_call_types(node, object_types)
+        return types unless types.empty?
+      end
+      if (block = node.block) && node.name != "new" && !object_types.empty?
+        types = infer_open_call_types(node, block, object_types)
+        return types unless types.empty?
+      end
+      if node.name != "new"
+        types = infer_class_method_call_types(node)
+        return types unless types.empty?
+      end
+      nil
+    end
+
+    private def infer_object_call_types(node : Crystal::Call, object_types : Array(String)) : Array(String)
+      block_types = infer_block_call_types(node, object_types)
+      return block_types unless block_types.empty?
+
+      special_types = infer_special_call_types(node, object_types)
+      return special_types unless special_types.empty?
+
+      return_types = [] of String
+      object_types.each do |type_name|
+        methods = @query.methods_named(type_name, node.name, class_method: false) +
+                  @query.methods_named(type_name, node.name, class_method: true)
+
+        call_arg_count = node.args.size + (node.named_args || [] of Crystal::NamedArgument).size
+        if methods.any? { |method| method.args.size == call_arg_count }
+          methods = methods.select { |method| method.args.size == call_arg_count }
+        end
+
+        methods.each do |method|
+          if return_type = method.return_type
+            return_type = TypeUtils.substitute_free_vars(return_type, method.free_vars, type_name)
+            expanded = TypeUtils.expand_type_names(return_type).map { |t_name| t_name == "self" ? method.owner : t_name }
+            return_types.concat(resolve_type_names(expanded, method.owner))
           end
-          if methods.any? && methods.none?(&.block_restriction)
-            # Only `open`-style methods (`File.open`, `IO.open`) declare
-            # a bare `&` and return the block's value; other bare-&
-            # methods with a `: self`-annotated return (`String.build`)
-            # ignore the block's value and are structurally identical
-            # in the index, so the name is the discriminator.
-            if node.name == "open" && methods.any? { |method| method.return_type == "self" }
-              block_types = infer_block_result_types(node, block, object_types)
-              return block_types unless block_types.empty?
-            end
+        end
+      end
+      return_types
+    end
+
+    private def infer_bare_call_types(node : Crystal::Call) : Array(String)
+      return_types = [] of String
+      if type_name = @current_type_name
+        @query.methods_named(type_name, node.name, class_method: class_method_context?).each do |method|
+          if return_type = method.return_type
+            return_types.concat(resolve_type_names(TypeUtils.expand_type_names(return_type), method.owner))
           end
         end
       end
 
-      # A class-method call on a type path (`Inference.for(...)`,
-      # `Project.best_fit_for_file`): resolve the type against the
-      # enclosing namespace and look up the class method's return type.
-      if node.name != "new"
-        if object = node.obj
-          if type_name = type_expression_name(object)
-            if resolved = @query.resolve_type_name(type_name, namespace: @current_type_name)
-              @query.methods_named(resolved, node.name, class_method: true).each do |method|
-                if return_type = method.return_type
-                  # `: self?`-style returns resolve to the method's owner.
-                  return_types = TypeUtils.expand_type_names(return_type).map { |t| t == "self" ? method.owner : t }
-                  return resolve_type_names(return_types, method.owner).uniq
-                end
+      @query.top_level_methods.each do |method|
+        if method.name == node.name && (return_type = method.return_type)
+          return_types.concat(resolve_type_names(TypeUtils.expand_type_names(return_type)))
+        end
+      end
+      return_types
+    end
+
+    private def fallback_call_types(node : Crystal::Call, object_types : Array(String)) : Array(String)
+      types = [] of String
+      if def_node = find_same_file_def(node.name)
+        types.concat(same_file_def_last_expression_types(def_node))
+      end
+
+      if (types.empty? || types.all?(&.==("Nil"))) && node.obj
+        if object_types.any?(&.starts_with?("Crystal::"))
+          if semantic_return = TypeUtils.semantic_accessor_return(node.name)
+            types = [semantic_return]
+          end
+        end
+      end
+
+      if types.empty? && (block = node.block)
+        types.concat(infer_block_result_types(node, block))
+      end
+
+      types.uniq!
+      types
+    end
+
+    private def infer_new_call_types(node : Crystal::Call) : Array(String)
+      if node.obj
+        if type_name = type_expression_name(node.obj.as(Crystal::ASTNode))
+          return [type_name] if @query.find_type(type_name)
+        end
+      elsif class_method_context?
+        if (type_name = @current_type_name) && @query.find_type(type_name)
+          return [type_name]
+        end
+      end
+      [] of String
+    end
+
+    private def infer_try_call_types(node : Crystal::Call, object_types : Array(String)) : Array(String)
+      non_nil_types = object_types.reject(&.==("Nil")).uniq!
+      return ["Nil"] if non_nil_types.empty?
+
+      block_types = if block = node.block
+                      infer_block_result_types(node, block, object_types)
+                    elsif block_arg = node.block_arg
+                      case block_arg
+                      when Crystal::ProcLiteral
+                        proc_literal_output_types(block_arg)
+                      else
+                        infer_types(block_arg)
+                      end
+                    else
+                      [] of String
+                    end
+
+      return (block_types + ["Nil"]).uniq unless block_types.empty?
+      [] of String
+    end
+
+    private def infer_open_call_types(node : Crystal::Call, block : Crystal::Block, object_types : Array(String)) : Array(String)
+      methods = object_types.flat_map do |type_name|
+        @query.methods_named(type_name, node.name, class_method: false) +
+          @query.methods_named(type_name, node.name, class_method: true)
+      end
+
+      if !methods.empty? && methods.none?(&.block_restriction)
+        if node.name == "open" && methods.any? { |method| method.return_type == "self" }
+          block_types = infer_block_result_types(node, block, object_types)
+          return block_types unless block_types.empty?
+        end
+      end
+      [] of String
+    end
+
+    private def infer_class_method_call_types(node : Crystal::Call) : Array(String)
+      if node.obj
+        if type_name = type_expression_name(node.obj.as(Crystal::ASTNode))
+          if resolved = @query.resolve_type_name(type_name, namespace: @current_type_name)
+            @query.methods_named(resolved, node.name, class_method: true).each do |method|
+              if return_type = method.return_type
+                return_types = TypeUtils.expand_type_names(return_type).map { |resolved_t| resolved_t == "self" ? method.owner : resolved_t }
+                return resolve_type_names(return_types, method.owner).uniq
               end
             end
           end
         end
       end
-
-      if object = node.obj
-        block_types = infer_block_call_types(node, object_types)
-        return block_types unless block_types.empty?
-
-        special_types = infer_special_call_types(node, object_types)
-        return special_types unless special_types.empty?
-      end
-
-      return_types = [] of String
-
-      if object = node.obj
-        object_types.each do |type_name|
-          # A constant receiver (`Project.best_fit_for_file`) resolves to a
-          # class: look up class methods alongside instance methods.
-          methods = @query.methods_named(type_name, node.name, class_method: false) +
-                    @query.methods_named(type_name, node.name, class_method: true)
-          # Prefer overloads whose arity matches the call (`shift` vs
-          # `shift(n)` on a delegated array): the exact match names the
-          # value, the other overloads would type the local as the array
-          # itself. Falls back to all methods when no arity matches
-          # (optional/default args).
-          call_arg_count = node.args.size + (node.named_args || [] of Crystal::NamedArgument).size
-          if methods.any? { |method| method.args.size == call_arg_count }
-            methods = methods.select { |method| method.args.size == call_arg_count }
-          end
-          methods.each do |method|
-            if return_type = method.return_type
-              # `Array(T)#+` returns `Array(T)`: substitute the receiver's
-              # concrete element types for the free vars so the local keeps
-              # `Array(X)` instead of an unresolvable `T`.
-              return_type = TypeUtils.substitute_free_vars(return_type, method.free_vars, type_name)
-              # `: self?`-style returns resolve to the method's owner.
-              expanded = TypeUtils.expand_type_names(return_type).map { |t| t == "self" ? method.owner : t }
-              # Bare names (`Block`) resolve against the method's own
-              # namespace, the way the compiler would.
-              return_types.concat(resolve_type_names(expanded, method.owner))
-            end
-          end
-        end
-      else
-        # A bare call resolves against the enclosing type first (self call),
-        # then against top-level methods.
-        if type_name = @current_type_name
-          @query.methods_named(type_name, node.name, class_method: class_method_context?).each do |method|
-            if return_type = method.return_type
-              return_types.concat(resolve_type_names(TypeUtils.expand_type_names(return_type), method.owner))
-            end
-          end
-        end
-
-        @query.top_level_methods.each do |method|
-          if method.name == node.name && (return_type = method.return_type)
-            return_types.concat(resolve_type_names(TypeUtils.expand_type_names(return_type)))
-          end
-        end
-
-        # A same-file self-call whose def declares no return type
-        # (`operator = preceding_period(...)` ending in a `find`): infer
-        # the def body's last expression.
-        if return_types.empty?
-          if def_node = find_same_file_def(node.name)
-            return_types.concat(same_file_def_last_expression_types(def_node))
-          end
-        end
-      end
-
-      # Compiler-semantic accessors (`ASTNode#type?`, base
-      # `Type#parents`/`types?`/`remove_alias`) exist in the index without
-      # a usable return (synthesized by the semantic pass, or base-class
-      # dummies returning nil): apply the known compiler signature so
-      # receivers of AST/type values keep their chains (`node_type.doc`,
-      # `type.parents.try &.each`).
-      if (return_types.empty? || return_types.all?(&.==("Nil"))) && node.obj
-        if object_types.any?(&.starts_with?("Crystal::"))
-          if semantic_return = TypeUtils.semantic_accessor_return(node.name)
-            return_types = [semantic_return]
-          end
-        end
-      end
-
-      # Unknown block-taking method (`@mutex.synchronize { ... }`): Crystal
-      # yields return the block's value, so when the index records no
-      # return type at all, fall back to the block's inferred result.
-      if return_types.empty? && (block = node.block)
-        return_types.concat(infer_block_result_types(node, block))
-      end
-
-      return_types.uniq
+      [] of String
     end
 
-    # The def body's last expression's types, after processing the preceding
-    # statements so locals (a `spans` accumulator) are typed. The callee's
-    # locals must not leak into the caller's scope: the whole walk runs on a
     # saved state that is restored before returning.
     private def same_file_def_last_expression_types(def_node : Crystal::Def) : Array(String)
       body = def_node.body
@@ -996,7 +1101,7 @@ module Crystalline::Lightweight
       body = body.body if body.is_a?(Crystal::ExceptionHandler)
       saved_state = current_state
       begin
-        if body.is_a?(Crystal::Expressions) && body.expressions.any?
+        if body.is_a?(Crystal::Expressions) && !body.expressions.empty?
           body.expressions[0...-1].each do |expression|
             process_node(expression, apply_cursor_bounds: false)
           end
@@ -1153,29 +1258,30 @@ module Crystalline::Lightweight
     end
 
     private def infer_special_call_types(node : Crystal::Call, object_types : Array(String)) : Array(String)
-      case node.name
-      when "not_nil!"
-        # The receiver type may itself be a union string (`Location | ::Nil`):
-        # split it so the nil branch is actually removed.
-        return object_types.flat_map { |t| TypeUtils.expand_type_names(t) }
-          .reject { |t| t == "Nil" || t == "::Nil" }.uniq!
-      when "tap", "each", "each_with_index"
-        return object_types.uniq
-      when "reverse_each"
-        # `arr.reverse_each.find { ... }` chains on the enumerator; the
-        # indexed overload is the block form (`: Nil`).
-        return object_types.uniq if node.block.nil?
+      if types = special_method_types(node.name, node, object_types)
+        return types
+      end
+
+      return_types = [] of String
+      object_types.each do |type_name|
+        return_types.concat(container_call_types(type_name, node.name))
+      end
+      return_types.uniq
+    end
+
+    private def special_method_types(method_name : String, node : Crystal::Call, object_types : Array(String)) : Array(String)?
+      if types = special_method_types_enumerable(method_name, node, object_types)
+        return types
+      end
+
+      if misc_types = special_method_types_misc(method_name, node, object_types)
+        return misc_types
+      end
+
+      case method_name
       when "[]"
-        # `arr[1..]` slices (returns the array), `arr[1]` indexes (element).
         return object_types.uniq if node.args.first?.is_a?(Crystal::RangeLiteral)
-      when "each_with_object"
-        return node.args.first?.try { |arg| infer_types(arg) } || [] of String
-      when "select", "reject"
-        return object_types.uniq
       when "flatten"
-        # `Array(T)#flatten` is compiler-inferred (no indexed return):
-        # the chain still flows through the array; a tuple flattens into
-        # an array of its elements' union.
         return object_types.flat_map do |type_name|
           if TypeUtils.array_element_types(type_name)
             [type_name]
@@ -1186,12 +1292,30 @@ module Crystalline::Lightweight
           end
         end.uniq!
       end
+      nil
+    end
 
-      return_types = [] of String
-      object_types.each do |type_name|
-        return_types.concat(container_call_types(type_name, node.name))
+    private def special_method_types_misc(method_name : String, node : Crystal::Call, object_types : Array(String)) : Array(String)?
+      case method_name
+      when "not_nil!"
+        return object_types.flat_map { |type_name| TypeUtils.expand_type_names(type_name) }
+          .reject { |type_name| type_name == "Nil" || type_name == "::Nil" }.uniq!
+      when "tap", "each", "each_with_index"
+        return object_types.uniq
       end
-      return_types.uniq
+      nil
+    end
+
+    private def special_method_types_enumerable(method_name : String, node : Crystal::Call, object_types : Array(String)) : Array(String)?
+      case method_name
+      when "reverse_each"
+        return object_types.uniq if node.block.nil?
+      when "each_with_object"
+        return node.args.first?.try { |arg| infer_types(arg) } || [] of String
+      when "select", "reject"
+        return object_types.uniq
+      end
+      nil
     end
 
     private def infer_array_literal_types(node : Crystal::ArrayLiteral) : Array(String)
@@ -1225,17 +1349,41 @@ module Crystalline::Lightweight
     end
 
     private def infer_named_tuple_literal_types(node : Crystal::NamedTupleLiteral) : Array(String)
-      parts = node.entries.map do |entry|
+      parts = node.entries.compact_map do |entry|
         value_types = infer_types(entry.value)
         next unless value_types.present?
         "#{entry.key}: #{join_union_types(value_types)}"
-      end.compact
+      end
       return ["NamedTuple"] if parts.empty?
 
       ["NamedTuple(#{parts.join(", ")})"]
     end
 
     private def container_call_types(type_name : String, method_name : String) : Array(String)
+      if types = array_call_types(type_name, method_name)
+        return types
+      end
+
+      if types = hash_call_types(type_name, method_name)
+        return types
+      end
+
+      if types = tuple_call_types(type_name, method_name)
+        return types
+      end
+
+      if value_types = TypeUtils.named_tuple_value_types(type_name, method_name)
+        return value_types
+      end
+
+      if method_name == "dig" && (value_types = TypeUtils.named_tuple_all_value_types(type_name))
+        return (value_types + ["Nil"]).uniq
+      end
+
+      [] of String
+    end
+
+    private def array_call_types(type_name : String, method_name : String) : Array(String)?
       if element_types = TypeUtils.array_element_types(type_name)
         case method_name
         when "first", "last", "[]", "find!", "reduce"
@@ -1246,7 +1394,10 @@ module Crystalline::Lightweight
           return [type_name]
         end
       end
+      nil
+    end
 
+    private def hash_call_types(type_name : String, method_name : String) : Array(String)?
       if value_types = TypeUtils.hash_value_types(type_name)
         case method_name
         when "[]", "fetch"
@@ -1257,41 +1408,46 @@ module Crystalline::Lightweight
           return [type_name]
         end
       end
+      nil
+    end
 
+    private def tuple_call_types(type_name : String, method_name : String) : Array(String)?
       if method_name == "dig"
         if tuple_types = TypeUtils.tuple_element_types(type_name)
           return (tuple_types.flatten + ["Nil"]).uniq
         end
-
-        if value_types = TypeUtils.named_tuple_all_value_types(type_name)
-          return (value_types + ["Nil"]).uniq
-        end
       end
 
       if tuple_types = TypeUtils.tuple_element_types(type_name)
-        case method_name
-        when "first"
-          return tuple_types.first? || [] of String
-        when "last"
-          return tuple_types.last? || [] of String
-        when "[]"
-          # `Tuple#[]`/`[]?` have no indexed return (compiler-inferred):
-          # approximate with the union of all elements (+ Nil).
-          return tuple_types.flatten.uniq!
-        when "[]?"
-          return (tuple_types.flatten.uniq! + ["Nil"]).uniq
-        when "first?"
-          return ((tuple_types.first? || [] of String) + ["Nil"]).uniq
-        when "last?"
-          return ((tuple_types.last? || [] of String) + ["Nil"]).uniq
-        end
+        return tuple_call_types_elements(method_name, tuple_types)
       end
+      nil
+    end
 
-      if value_types = TypeUtils.named_tuple_value_types(type_name, method_name)
-        return value_types
+    private def tuple_call_types_elements(method_name : String, tuple_types : Array(Array(String))) : Array(String)?
+      case method_name
+      when "first"
+        return tuple_call_types_first(tuple_types)
+      when "last"
+        return tuple_call_types_last(tuple_types)
+      when "[]"
+        return tuple_types.flatten.uniq!
+      when "[]?"
+        return (tuple_types.flatten.uniq! + ["Nil"]).uniq
+      when "first?"
+        return (tuple_call_types_first(tuple_types) + ["Nil"]).uniq
+      when "last?"
+        return (tuple_call_types_last(tuple_types) + ["Nil"]).uniq
       end
+      nil
+    end
 
-      [] of String
+    private def tuple_call_types_first(tuple_types : Array(Array(String))) : Array(String)
+      tuple_types.first? || [] of String
+    end
+
+    private def tuple_call_types_last(tuple_types : Array(Array(String))) : Array(String)
+      tuple_types.last? || [] of String
     end
 
     private def join_union_types(type_names : Array(String)) : String
@@ -1299,104 +1455,142 @@ module Crystalline::Lightweight
     end
 
     private def number_kind_name(kind : Crystal::NumberKind) : String
+      int_name = int_number_kind_name(kind)
+      return int_name if int_name
+
+      uint_name = uint_number_kind_name(kind)
+      return uint_name if uint_name
+
+      case kind
+      when .f32? then "Float32"
+      when .f64? then "Float64"
+      else            "Int32"
+      end
+    end
+
+    private def int_number_kind_name(kind : Crystal::NumberKind) : String?
       case kind
       when .i8?   then "Int8"
       when .i16?  then "Int16"
       when .i32?  then "Int32"
       when .i64?  then "Int64"
       when .i128? then "Int128"
+      end
+    end
+
+    private def uint_number_kind_name(kind : Crystal::NumberKind) : String?
+      case kind
       when .u8?   then "UInt8"
       when .u16?  then "UInt16"
       when .u32?  then "UInt32"
       when .u64?  then "UInt64"
       when .u128? then "UInt128"
-      when .f32?  then "Float32"
-      when .f64?  then "Float64"
-      else             "Int32"
       end
     end
 
     private def locate_context(node : Crystal::ASTNode) : Bool
-      found = false
-      walker = uninitialized Proc(Crystal::ASTNode, String?, Crystal::ASTNode?, Nil)
-      walker = ->(current : Crystal::ASTNode, type_name : String?, type_body : Crystal::ASTNode?) do
-        case current
-        when Crystal::ClassDef
-          qualified_name = qualify_type_name(current.name.to_s, type_name)
-          if contains_cursor?(current.body) || starts_before_or_at_cursor?(current.body)
-            # The cursor may sit directly in the type body (not inside a
-            # def): remember the enclosing type so ivars still resolve.
-            # Only when the cursor is truly inside the body: top-level code
-            # after the type must stay in the top-level context.
-            if contains_cursor?(current.body)
-              @current_type_name = qualified_name
-              @current_type_body = current.body
-            end
-            walker.call(current.body, qualified_name, current.body)
-          end
-        when Crystal::ModuleDef
-          qualified_name = qualify_type_name(current.name.to_s, type_name)
-          if contains_cursor?(current.body) || starts_before_or_at_cursor?(current.body)
-            if contains_cursor?(current.body)
-              @current_type_name = qualified_name
-              @current_type_body = current.body
-            end
-            walker.call(current.body, qualified_name, current.body)
-          end
-        when Crystal::EnumDef
-          qualified_name = qualify_type_name(current.name.to_s, type_name)
-          current.members.each do |member|
-            walker.call(member, qualified_name, type_body) if contains_cursor?(member) || starts_before_or_at_cursor?(member)
-          end
-        when Crystal::Expressions
-          current.expressions.each do |expression|
-            walker.call(expression, type_name, type_body) if contains_cursor?(expression) || starts_before_or_at_cursor?(expression)
-          end
-        when Crystal::Def
-          if contains_cursor?(current)
-            @current_def = current
-            @current_type_name = type_name
-            @class_method_context = !current.receiver.nil?
-            @current_type_body = type_body
-            found = true
-          end
-        when Crystal::VisibilityModifier
-          # `private def` / `protected def` wrap the def in a VisibilityModifier.
-          walker.call(current.exp, type_name, type_body) if contains_cursor?(current.exp) || starts_before_or_at_cursor?(current.exp)
-        when Crystal::If
-          walker.call(current.then, type_name, type_body) if contains_cursor?(current.then) || starts_before_or_at_cursor?(current.then)
-          walker.call(current.else, type_name, type_body) if contains_cursor?(current.else) || starts_before_or_at_cursor?(current.else)
-        when Crystal::Unless
-          walker.call(current.then, type_name, type_body) if contains_cursor?(current.then) || starts_before_or_at_cursor?(current.then)
-          walker.call(current.else, type_name, type_body) if contains_cursor?(current.else) || starts_before_or_at_cursor?(current.else)
-        when Crystal::MacroIf
-          # `{% if %}` / `{% elsif %}` / `{% else %}` branches hold raw
-          # macro text with real code (defs, class vars) that only exists
-          # behind a compile-time flag: reparse each branch and descend so
-          # the cursor still locates its enclosing def.
-          walk_macro_if_branch(current.then, type_name, type_body, walker)
-          walk_macro_if_branch(current.else, type_name, type_body, walker)
-        end
-      end
-
-      walker.call(node, nil, nil)
-      found
+      locate_context_step(node, nil, nil)
     end
 
-    # Walks one macro branch during locate_context. An `{% elsif %}` chain
-    # nests as a MacroIf in the else slot: recurse directly on it. A plain
-    # branch is raw macro text whose reparse restarts at 1:1, so the cursor
-    # is translated into the branch text's coordinates first (the branch
-    # node's own location still points at the original file).
-    private def walk_macro_if_branch(branch : Crystal::ASTNode?, type_name : String?, type_body : Crystal::ASTNode?, walker : Proc(Crystal::ASTNode, String?, Crystal::ASTNode?, Nil))
-      return unless branch
-      if branch.is_a?(Crystal::MacroIf)
-        walker.call(branch, type_name, type_body)
-        return
+    private def locate_context_step(current : Crystal::ASTNode, type_name : String?, type_body : Crystal::ASTNode?) : Bool
+      if found = locate_context_step_type_defs(current, type_name, type_body)
+        return found
       end
-      return unless contains_cursor?(branch) || starts_before_or_at_cursor?(branch)
+
+      if found = locate_context_step_control(current, type_name, type_body)
+        return found
+      end
+
+      if current.is_a?(Crystal::Expressions)
+        current.expressions.each do |expression|
+          return true if (in_cursor_bounds?(expression)) && locate_context_step(expression, type_name, type_body)
+        end
+      end
+      false
+    end
+
+    private def locate_context_step_type_defs(current : Crystal::ASTNode, type_name : String?, type_body : Crystal::ASTNode?) : Bool
+      case current
+      when Crystal::ClassDef
+        return locate_context_class_def(current, type_name)
+      when Crystal::ModuleDef
+        return locate_context_module_def(current, type_name)
+      when Crystal::EnumDef
+        qualified_name = qualify_type_name(current.name.to_s, type_name)
+        current.members.each do |member|
+          return true if (in_cursor_bounds?(member)) && locate_context_step(member, qualified_name, type_body)
+        end
+        return true
+      when Crystal::Def
+        if contains_cursor?(current)
+          @current_def = current
+          @current_type_name = type_name
+          @class_method_context = !current.receiver.nil?
+          @current_type_body = type_body
+          return true
+        end
+      when Crystal::VisibilityModifier
+        return locate_context_step(current.exp, type_name, type_body) if in_cursor_bounds?(current.exp)
+      end
+      false
+    end
+
+    private def in_cursor_bounds?(node : Crystal::ASTNode)
+      contains_cursor?(node) || starts_before_or_at_cursor?(node)
+    end
+
+    private def locate_context_step_control(current : Crystal::ASTNode, type_name : String?, type_body : Crystal::ASTNode?) : Bool
+      case current
+      when Crystal::If
+        return true if in_cursor_bounds?(current.then) && locate_context_step(current.then, type_name, type_body)
+        return true if in_cursor_bounds?(current.else) && locate_context_step(current.else, type_name, type_body)
+      when Crystal::Unless
+        return locate_context_step_unless(current, type_name, type_body)
+      when Crystal::MacroIf
+        return true if walk_macro_if_branch(current.then, type_name, type_body)
+        return true if walk_macro_if_branch(current.else, type_name, type_body)
+      end
+      false
+    end
+
+    private def locate_context_step_unless(current : Crystal::Unless, type_name : String?, type_body : Crystal::ASTNode?) : Bool
+      return true if in_cursor_bounds?(current.then) && locate_context_step(current.then, type_name, type_body)
+      return true if in_cursor_bounds?(current.else) && locate_context_step(current.else, type_name, type_body)
+      false
+    end
+
+    private def locate_context_class_def(current : Crystal::ClassDef, type_name : String?) : Bool
+      qualified_name = qualify_type_name(current.name.to_s, type_name)
+      if in_cursor_bounds?(current.body)
+        if contains_cursor?(current.body)
+          @current_type_name = qualified_name
+          @current_type_body = current.body
+        end
+        return locate_context_step(current.body, qualified_name, current.body)
+      end
+      false
+    end
+
+    private def locate_context_module_def(current : Crystal::ModuleDef, type_name : String?) : Bool
+      qualified_name = qualify_type_name(current.name.to_s, type_name)
+      if in_cursor_bounds?(current.body)
+        if contains_cursor?(current.body)
+          @current_type_name = qualified_name
+          @current_type_body = current.body
+        end
+        return locate_context_step(current.body, qualified_name, current.body)
+      end
+      false
+    end
+
+    private def walk_macro_if_branch(branch : Crystal::ASTNode?, type_name : String?, type_body : Crystal::ASTNode?) : Bool
+      return false unless branch
+      if branch.is_a?(Crystal::MacroIf)
+        return locate_context_step(branch, type_name, type_body)
+      end
+      return false unless in_cursor_bounds?(branch)
       text = macro_branch_text(branch)
-      return unless text
+      return false unless text
       saved_line = @line
       saved_column = @column
       begin
@@ -1406,9 +1600,9 @@ module Crystalline::Lightweight
           end
           @line = @line - location.line_number + 1
         end
-        walker.call(Crystal::Parser.new(text).parse, type_name, type_body)
+        locate_context_step(Crystal::Parser.new(text).parse, type_name, type_body)
       rescue Crystal::SyntaxException
-        # A branch may not parse on its own (spliced interpolation): skip.
+        false
       ensure
         @line = saved_line
         @column = saved_column
@@ -1491,13 +1685,22 @@ module Crystalline::Lightweight
     end
 
     private def process_exception_handler(node : Crystal::ExceptionHandler, *, apply_cursor_bounds : Bool)
-      if !apply_cursor_bounds || contains_cursor?(node.body) || starts_before_or_at_cursor?(node.body)
-        process_node(node.body, apply_cursor_bounds: apply_cursor_bounds)
-        return if apply_cursor_bounds && contains_cursor?(node.body)
-      end
+      process_exception_handler_body(node, apply_cursor_bounds: apply_cursor_bounds)
+      process_exception_handler_rescues(node, apply_cursor_bounds: apply_cursor_bounds)
+      process_exception_handler_else(node, apply_cursor_bounds: apply_cursor_bounds)
+      process_exception_handler_ensure(node, apply_cursor_bounds: apply_cursor_bounds)
+    end
 
+    private def process_exception_handler_body(node : Crystal::ExceptionHandler, *, apply_cursor_bounds : Bool)
+      if !apply_cursor_bounds || in_cursor_bounds?(node.body)
+        process_node(node.body, apply_cursor_bounds: apply_cursor_bounds)
+      end
+    end
+
+    private def process_exception_handler_rescues(node : Crystal::ExceptionHandler, *, apply_cursor_bounds : Bool)
+      return if apply_cursor_bounds && contains_cursor?(node.body)
       node.rescues.try &.each do |rescue_clause|
-        next unless !apply_cursor_bounds || contains_cursor?(rescue_clause.body)
+        next if apply_cursor_bounds && !contains_cursor?(rescue_clause.body)
 
         saved_local_types = @local_types.dup
         begin
@@ -1508,14 +1711,18 @@ module Crystalline::Lightweight
         end
         return if apply_cursor_bounds
       end
+    end
 
+    private def process_exception_handler_else(node : Crystal::ExceptionHandler, *, apply_cursor_bounds : Bool)
+      return if apply_cursor_bounds && contains_cursor?(node.body)
       if rescue_else = node.else
         if !apply_cursor_bounds || contains_cursor?(rescue_else)
           process_node(rescue_else, apply_cursor_bounds: apply_cursor_bounds)
-          return if apply_cursor_bounds
         end
       end
+    end
 
+    private def process_exception_handler_ensure(node : Crystal::ExceptionHandler, *, apply_cursor_bounds : Bool)
       if ensure_clause = node.ensure
         if !apply_cursor_bounds || contains_cursor?(ensure_clause)
           process_node(ensure_clause, apply_cursor_bounds: apply_cursor_bounds)
@@ -1607,27 +1814,49 @@ module Crystalline::Lightweight
       # narrowed state (like process_if does for the taken branch):
       # the merge below is only for statements after the case.
       if apply_cursor_bounds
-        node.whens.each do |when_node|
-          if contains_cursor?(when_node.body)
-            restore_state(base_state)
-            if subject
-              if narrowed = narrow_case_subject(subject, when_node)
-                apply_case_subject_narrowing(subject, narrowed)
-              end
-            end
-            process_node(when_node.body, apply_cursor_bounds: true)
-            return
-          end
-        end
-        if else_branch = node.else
-          if contains_cursor?(else_branch)
-            restore_state(base_state)
-            process_node(else_branch, apply_cursor_bounds: true)
-            return
-          end
-        end
+        return if process_case_cursor_bounds(node, subject, base_state)
       end
 
+      branch_states = process_case_branches(node, subject, base_state, apply_cursor_bounds)
+
+      restore_state(base_state)
+      merged_local = base_state[0]
+      merged_ivar = base_state[1]
+      merged_cvar = base_state[2]
+      branch_states.each do |branch_state|
+        merged_local = merge_branch_types(base_state[0], merged_local, branch_state[0])
+        merged_ivar = merge_branch_types(base_state[1], merged_ivar, branch_state[1])
+        merged_cvar = merge_branch_types(base_state[2], merged_cvar, branch_state[2])
+      end
+      @local_types = merged_local
+      @instance_var_types = merged_ivar
+      @class_var_types = merged_cvar
+    end
+
+    private def process_case_cursor_bounds(node : Crystal::Case, subject : Crystal::ASTNode?, base_state : Tuple(Hash(String, Array(String)), Hash(String, Array(String)), Hash(String, Array(String)))) : Bool
+      node.whens.each do |when_node|
+        if contains_cursor?(when_node.body)
+          restore_state(base_state)
+          if subject
+            if narrowed = narrow_case_subject(subject, when_node)
+              apply_case_subject_narrowing(subject, narrowed)
+            end
+          end
+          process_node(when_node.body, apply_cursor_bounds: true)
+          return true
+        end
+      end
+      if else_branch = node.else
+        if contains_cursor?(else_branch)
+          restore_state(base_state)
+          process_node(else_branch, apply_cursor_bounds: true)
+          return true
+        end
+      end
+      false
+    end
+
+    private def process_case_branches(node : Crystal::Case, subject : Crystal::ASTNode?, base_state : Tuple(Hash(String, Array(String)), Hash(String, Array(String)), Hash(String, Array(String))), apply_cursor_bounds : Bool) : Array(Tuple(Hash(String, Array(String)), Hash(String, Array(String)), Hash(String, Array(String))))
       branch_states = [] of typeof(current_state)
       node.whens.each do |when_node|
         restore_state(base_state)
@@ -1648,19 +1877,7 @@ module Crystalline::Lightweight
         process_node(else_branch, apply_cursor_bounds: apply_cursor_bounds)
         branch_states << current_state
       end
-
-      restore_state(base_state)
-      merged_local = base_state[0]
-      merged_ivar = base_state[1]
-      merged_cvar = base_state[2]
-      branch_states.each do |branch_state|
-        merged_local = merge_branch_types(base_state[0], merged_local, branch_state[0])
-        merged_ivar = merge_branch_types(base_state[1], merged_ivar, branch_state[1])
-        merged_cvar = merge_branch_types(base_state[2], merged_cvar, branch_state[2])
-      end
-      @local_types = merged_local
-      @instance_var_types = merged_ivar
-      @class_var_types = merged_cvar
+      branch_states
     end
 
     private def narrow_case_subject(subject : Crystal::ASTNode, when_node : Crystal::When) : Array(String)?
@@ -1711,6 +1928,23 @@ module Crystalline::Lightweight
 
     private def apply_condition_refinement(node : Crystal::ASTNode, *, truthy : Bool)
       case node
+      when Crystal::Expressions, Crystal::Not, Crystal::And, Crystal::Or
+        apply_logical_condition_refinement(node, truthy: truthy)
+      when Crystal::IsA
+        refine_is_a(node, truthy: truthy)
+      when Crystal::Call
+        if node.name == "nil?" && node.args.empty?
+          refine_nil_check(node.obj, truthy: truthy)
+        end
+      when Crystal::Assign
+        refine_condition_assignment(node, truthy: truthy)
+      when Crystal::Var, Crystal::InstanceVar, Crystal::ClassVar
+        refine_truthiness(node, truthy: truthy)
+      end
+    end
+
+    private def apply_logical_condition_refinement(node : Crystal::ASTNode, *, truthy : Bool)
+      case node
       when Crystal::Expressions
         if expression = node.expressions.first?
           apply_condition_refinement(expression, truthy: truthy)
@@ -1723,32 +1957,7 @@ module Crystalline::Lightweight
           apply_condition_refinement(node.right, truthy: true)
         end
       when Crystal::Or
-        if truthy
-          # `x.is_a?(A) || x.is_a?(B)` narrows x to A | B.
-          if (left_is_a = node.left.as?(Crystal::IsA)) && (right_is_a = node.right.as?(Crystal::IsA))
-            if left_is_a.obj.to_s == right_is_a.obj.to_s && left_is_a.obj.class == right_is_a.obj.class
-              target_types = [left_is_a, right_is_a].compact_map do |is_a_node|
-                TypeUtils.expand_type_names(is_a_node.const.to_s).map { |name|
-                  @query.resolve_type_name(name, namespace: @current_type_name) || name
-                }
-              end.flatten.uniq!
-              set_reference_types(left_is_a.obj, target_types) unless target_types.empty?
-            end
-          end
-        else
-          apply_condition_refinement(node.left, truthy: false)
-          apply_condition_refinement(node.right, truthy: false)
-        end
-      when Crystal::IsA
-        refine_is_a(node, truthy: truthy)
-      when Crystal::Call
-        if node.name == "nil?" && node.args.empty?
-          refine_nil_check(node.obj, truthy: truthy)
-        end
-      when Crystal::Assign
-        refine_condition_assignment(node, truthy: truthy)
-      when Crystal::Var, Crystal::InstanceVar, Crystal::ClassVar
-        refine_truthiness(node, truthy: truthy)
+        refine_or_condition(node, truthy: truthy)
       end
     end
 
@@ -1768,6 +1977,24 @@ module Crystalline::Lightweight
       set_reference_types(node.target, refined_types.map { |type_name|
         @query.resolve_type_name(type_name, namespace: @current_type_name) || type_name
       }.uniq!)
+    end
+
+    private def refine_or_condition(node : Crystal::Or, *, truthy : Bool)
+      if truthy
+        if (left_is_a = node.left.as?(Crystal::IsA)) && (right_is_a = node.right.as?(Crystal::IsA))
+          if left_is_a.obj.to_s == right_is_a.obj.to_s && left_is_a.obj.class == right_is_a.obj.class
+            target_types = [left_is_a, right_is_a].compact_map do |is_a_node|
+              TypeUtils.expand_type_names(is_a_node.const.to_s).map { |name|
+                @query.resolve_type_name(name, namespace: @current_type_name) || name
+              }
+            end.flatten.uniq!
+            set_reference_types(left_is_a.obj, target_types) unless target_types.empty?
+          end
+        end
+      else
+        apply_condition_refinement(node.left, truthy: false)
+        apply_condition_refinement(node.right, truthy: false)
+      end
     end
 
     private def refine_is_a(node : Crystal::IsA, *, truthy : Bool)
@@ -1933,46 +2160,46 @@ module Crystalline::Lightweight
       @local_types[arg.name] = resolved
     end
 
+    private def collect_call_site_args_for_call(node : Crystal::Call, definition : Crystal::Def, untyped : Array(Crystal::Arg), types : Hash(String, Array(String)), enclosing_def : Crystal::Def? = nil)
+      if node.name == definition.name
+        record_call_site_arg_types(node, definition, untyped, types, enclosing_def)
+      end
+      node.obj.try { |obj| collect_call_site_arg_types(obj, definition, untyped, types, enclosing_def) }
+      node.args.each { |arg| collect_call_site_arg_types(arg, definition, untyped, types, enclosing_def) }
+      node.block.try { |block| collect_call_site_arg_types(block, definition, untyped, types, enclosing_def) }
+      node.named_args.try { |named_args| named_args.each { |named_arg| collect_call_site_arg_types(named_arg.value, definition, untyped, types, enclosing_def) } }
+    end
+
+    private def record_call_site_arg_types(call : Crystal::Call, definition : Crystal::Def, untyped : Array(Crystal::Arg), types : Hash(String, Array(String)), enclosing_def : Crystal::Def?)
+      untyped.each do |arg|
+        value = call_arg_value(call, definition, arg)
+        next unless value
+
+        if enclosing_def && should_defer_call_site?(enclosing_def, definition, value)
+          queue_pending_call_site(enclosing_def, call)
+          next
+        end
+
+        inferred = infer_types(value)
+        next if inferred.empty?
+        types[arg.name] = (types[arg.name]? || [] of String) + inferred
+      end
+    end
+
+    private def should_defer_call_site?(caller : Crystal::Def?, definition : Crystal::Def, value : Crystal::ASTNode) : Bool
+      return false unless caller
+      caller != definition && !literal_value?(value)
+    end
+
+    private def queue_pending_call_site(caller : Crystal::Def, call : Crystal::Call)
+      pending_sites = (@pending_call_sites ||= {} of Crystal::Def => Array(Crystal::Call))
+      (pending_sites[caller] ||= [] of Crystal::Call) << call
+    end
+
     private def collect_call_site_arg_types(node : Crystal::ASTNode, definition : Crystal::Def, untyped : Array(Crystal::Arg), types : Hash(String, Array(String)), enclosing_def : Crystal::Def? = nil)
       case node
       when Crystal::Call
-        if node.name == definition.name
-          untyped.each do |arg|
-            # Match the untyped argument by NAME: a call may pass it
-            # positionally (`foo(x)`) or as a named argument
-            # (`process_node(node, apply_cursor_bounds: true)`). Matching
-            # by position alone would type the WRONG value whenever the
-            # call omits or reorders arguments.
-            value = call_arg_value(node, definition, arg)
-            next unless value
-            if caller = enclosing_def
-              if caller == definition
-                inferred = infer_types(value)
-              elsif literal_value?(value)
-                # A literal's type does not depend on the caller's
-                # locals: no caller walk needed.
-                inferred = infer_types(value)
-              else
-                # The value's type depends on the caller's locals: defer
-                # to one bounded walk of the caller per call site (see
-                # collect_pending_call_site_types), not a full caller
-                # body walk per site.
-                pending_sites = (@pending_call_sites ||= {} of Crystal::Def => Array(Crystal::Call))
-                (pending_sites[caller] ||= [] of Crystal::Call) << node
-                next
-              end
-            else
-              inferred = infer_types(value)
-            end
-            next if inferred.empty?
-            types[arg.name] = (types[arg.name]? || [] of String) + inferred
-          end
-        end
-        if obj = node.obj
-          collect_call_site_arg_types(obj, definition, untyped, types, enclosing_def)
-        end
-        node.args.each { |arg| collect_call_site_arg_types(arg, definition, untyped, types, enclosing_def) }
-        node.block.try { |block| collect_call_site_arg_types(block, definition, untyped, types, enclosing_def) }
+        collect_call_site_args_for_call(node, definition, untyped, types, enclosing_def)
       when Crystal::Expressions
         node.expressions.each { |exp| collect_call_site_arg_types(exp, definition, untyped, types, enclosing_def) }
       when Crystal::Def
@@ -1981,6 +2208,13 @@ module Crystalline::Lightweight
         collect_call_site_arg_types(node.body, definition, untyped, types, enclosing_def)
       when Crystal::VisibilityModifier
         collect_call_site_arg_types(node.exp, definition, untyped, types, enclosing_def)
+      else
+        collect_call_site_arg_types_control(node, definition, untyped, types, enclosing_def)
+      end
+    end
+
+    private def collect_call_site_arg_types_control(node : Crystal::ASTNode, definition : Crystal::Def, untyped : Array(Crystal::Arg), types : Hash(String, Array(String)), enclosing_def : Crystal::Def? = nil)
+      case node
       when Crystal::If, Crystal::Unless
         collect_call_site_arg_types(node.cond, definition, untyped, types, enclosing_def)
         collect_call_site_arg_types(node.then, definition, untyped, types, enclosing_def)
@@ -1990,11 +2224,11 @@ module Crystalline::Lightweight
         collect_call_site_arg_types(node.body, definition, untyped, types, enclosing_def)
       when Crystal::Case
         node.cond.try { |cond| collect_call_site_arg_types(cond, definition, untyped, types, enclosing_def) }
-        node.whens.each { |w| collect_call_site_arg_types(w, definition, untyped, types, enclosing_def) }
+        node.whens.each { |when_node| collect_call_site_arg_types(when_node, definition, untyped, types, enclosing_def) }
         node.else.try { |e| collect_call_site_arg_types(e, definition, untyped, types, enclosing_def) }
       when Crystal::ExceptionHandler
         node.body.try { |body| collect_call_site_arg_types(body, definition, untyped, types, enclosing_def) }
-        node.rescues.try { |rescues| rescues.each { |r| collect_call_site_arg_types(r, definition, untyped, types, enclosing_def) } }
+        node.rescues.try { |rescues| rescues.each { |rescue_node| collect_call_site_arg_types(rescue_node, definition, untyped, types, enclosing_def) } }
       when Crystal::Block
         collect_call_site_arg_types(node.body, definition, untyped, types, enclosing_def)
       when Crystal::Assign
@@ -2074,7 +2308,7 @@ module Crystalline::Lightweight
       case node
       when Crystal::Def
         node.args.each do |arg|
-          next unless untyped.any? { |u| u.name == arg.name }
+          next unless untyped.any? { |untyped_arg| untyped_arg.name == arg.name }
           next unless restriction = arg.restriction
           types[arg.name] = (types[arg.name]? || [] of String) + resolve_type_names(restriction.to_s)
         end
@@ -2090,7 +2324,7 @@ module Crystalline::Lightweight
       when Crystal::Assign
         # A same-name local in another def is a good hint too
         # (`project = Project.best_fit_for_file(...)`).
-        if (target = node.target).is_a?(Crystal::Var) && untyped.any? { |u| u.name == target.name }
+        if (target = node.target).is_a?(Crystal::Var) && untyped.any? { |untyped_arg| untyped_arg.name == target.name }
           inferred = infer_types(node.value)
           types[target.name] = (types[target.name]? || [] of String) + inferred unless inferred.empty?
         end
@@ -2135,11 +2369,11 @@ module Crystalline::Lightweight
         next if @instance_var_types.has_key?(name)
         # Raw declarations carry unions (`URI?`, `URI | ::Nil`): expand and
         # namespace-resolve them so receiver lookups see plain type names.
-        @instance_var_types[name] = type_names.flat_map { |type_name| resolve_type_names(TypeUtils.expand_type_names(type_name)) }.uniq!
+        @instance_var_types[name] = type_names.flat_map { |resolved_t| resolve_type_names(TypeUtils.expand_type_names(resolved_t)) }.uniq!
       end
       type.class_vars.each do |name, type_names|
         next if @class_var_types.has_key?(name)
-        @class_var_types[name] = type_names.flat_map { |type_name| resolve_type_names(TypeUtils.expand_type_names(type_name)) }.uniq!
+        @class_var_types[name] = type_names.flat_map { |resolved_t| resolve_type_names(TypeUtils.expand_type_names(resolved_t)) }.uniq!
       end
     end
 

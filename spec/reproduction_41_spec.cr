@@ -1,3 +1,4 @@
+require "./support/unwrap"
 require "spec"
 require "../src/crystalline/text_document"
 require "lsp/base/range"

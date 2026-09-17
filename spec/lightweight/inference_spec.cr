@@ -1,3 +1,4 @@
+require "../support/unwrap"
 require "spec"
 require "../../src/crystalline/requires"
 require "../../src/crystalline/main"
@@ -63,7 +64,7 @@ describe Crystalline::Lightweight::Inference do
     )
 
     inference.should_not be_nil
-    inference = inference.not_nil!
+    inference = inference.unwrap!
     inference.types_for("x").should eq(["Int32"])
     inference.types_for("message").should eq(["String"])
     inference.types_for("enabled").should eq(["Bool"])
@@ -113,7 +114,7 @@ describe Crystalline::Lightweight::Inference do
     )
 
     inference.should_not be_nil
-    inference = inference.not_nil!
+    inference = inference.unwrap!
     inference.self_types.should eq({["Wrapper"], false})
     inference.types_for("current").should eq(["Wrapper"])
     inference.types_for_instance_var("@greeter").should eq(["Greeter"])
@@ -149,7 +150,7 @@ describe Crystalline::Lightweight::Inference do
     )
 
     inference.should_not be_nil
-    inference = inference.not_nil!
+    inference = inference.unwrap!
     inference.types_for("item").sort.should eq(["Foo", "Int32"])
     inference.types_for("value").sort.should eq(["Int32", "String"])
   end
@@ -182,7 +183,7 @@ describe Crystalline::Lightweight::Inference do
     )
 
     inference.should_not be_nil
-    inference = inference.not_nil!
+    inference = inference.unwrap!
     inference.types_for("value").sort.should eq(["Bar", "Foo", "Nil"])
     inference.types_for("result").sort.should eq(["Bar", "Foo", "Nil"])
   end
@@ -213,7 +214,7 @@ describe Crystalline::Lightweight::Inference do
     )
 
     narrowed_inference.should_not be_nil
-    narrowed_inference = narrowed_inference.not_nil!
+    narrowed_inference = narrowed_inference.unwrap!
     narrowed_inference.types_for("candidate").should eq(["Greeter"])
     narrowed_inference.types_for("narrowed").should eq(["Greeter"])
 
@@ -234,7 +235,7 @@ describe Crystalline::Lightweight::Inference do
     )
 
     truthy_inference.should_not be_nil
-    truthy_inference = truthy_inference.not_nil!
+    truthy_inference = truthy_inference.unwrap!
     truthy_inference.types_for("candidate").should eq(["Greeter"])
     truthy_inference.types_for("truthy_candidate").should eq(["Greeter"])
   end
@@ -272,7 +273,7 @@ describe Crystalline::Lightweight::Inference do
     )
 
     case_inference.should_not be_nil
-    case_inference = case_inference.not_nil!
+    case_inference = case_inference.unwrap!
     case_inference.types_for("candidate").should eq(["Greeter"])
     case_inference.types_for("narrowed").should eq(["Greeter"])
 
@@ -294,7 +295,7 @@ describe Crystalline::Lightweight::Inference do
       Crystalline::Lightweight::Query.new(index, secondary: prelude_index),
     )
     union_inference.should_not be_nil
-    union_inference = union_inference.not_nil!
+    union_inference = union_inference.unwrap!
     union_inference.types_for("candidate").should eq(["Greeter"])
   end
 
@@ -339,7 +340,7 @@ describe Crystalline::Lightweight::Inference do
     )
 
     inference.should_not be_nil
-    inference = inference.not_nil!
+    inference = inference.unwrap!
     inference.types_for("resolved").should eq(["Greeter"])
   end
 
@@ -364,7 +365,7 @@ describe Crystalline::Lightweight::Inference do
     )
 
     inference.should_not be_nil
-    inference = inference.not_nil!
+    inference = inference.unwrap!
     inference.types_for("pair").should eq(["Tuple(Int32, String)"])
   end
 
@@ -427,7 +428,7 @@ describe Crystalline::Lightweight::Inference do
     )
 
     hash_inference.should_not be_nil
-    hash_inference = hash_inference.not_nil!
+    hash_inference = hash_inference.unwrap!
     hash_inference.types_for("key").should eq(["String"])
     hash_inference.types_for("value").should eq(["Greeter"])
 
@@ -441,7 +442,7 @@ describe Crystalline::Lightweight::Inference do
     )
 
     reduce_inference.should_not be_nil
-    reduce_inference = reduce_inference.not_nil!
+    reduce_inference = reduce_inference.unwrap!
     reduce_inference.types_for("memo").should eq(["Int32"])
     reduce_inference.types_for("item").should eq(["Int32"])
 
@@ -455,7 +456,7 @@ describe Crystalline::Lightweight::Inference do
     )
 
     each_with_object_inference.should_not be_nil
-    each_with_object_inference = each_with_object_inference.not_nil!
+    each_with_object_inference = each_with_object_inference.unwrap!
     each_with_object_inference.types_for("item").should eq(["Greeter"])
     each_with_object_inference.types_for("memo").should eq(["Array(String)"])
 
@@ -469,7 +470,7 @@ describe Crystalline::Lightweight::Inference do
     )
 
     return_inference.should_not be_nil
-    return_inference = return_inference.not_nil!
+    return_inference = return_inference.unwrap!
     return_inference.types_for("collected").should eq(["Array(String)"])
     return_inference.types_for("mapped").should eq(["Array(String)"])
     return_inference.types_for("flat_mapped").should eq(["Array(String)"])
@@ -507,7 +508,7 @@ describe Crystalline::Lightweight::Inference do
     )
 
     inference.should_not be_nil
-    inference = inference.not_nil!
+    inference = inference.unwrap!
     inference.types_for("acc").should eq(["Array(Int32)"])
     inference.types_for("item").should eq(["String"])
   end
@@ -536,7 +537,7 @@ describe Crystalline::Lightweight::Inference do
     )
 
     inference.should_not be_nil
-    inference = inference.not_nil!
+    inference = inference.unwrap!
     inference.types_for("foo").should eq(["Foo"])
     inference.types_for("message").should eq(["String"])
     inference.types_for("count").should eq(["Int32"])
@@ -579,8 +580,8 @@ describe Crystalline::Lightweight::Inference do
     )
 
     inference.should_not be_nil
-    inference = inference.not_nil!
-    inference.current_def.not_nil!.name.should eq("message")
+    inference = inference.unwrap!
+    inference.current_def.unwrap!.name.should eq("message")
     inference.self_types[0].should eq(["Greeter"])
     # The bare self-call `shout` resolves through the enclosing type.
     inference.types_for("m").should eq(["String"])
@@ -608,7 +609,7 @@ describe Crystalline::Lightweight::Inference do
     )
 
     inference.should_not be_nil
-    inference = inference.not_nil!
+    inference = inference.unwrap!
     inference.types_for("line").should eq(["String"])
     inference.types_for("message").should eq(["String"])
   end
@@ -644,7 +645,7 @@ describe Crystalline::Lightweight::Inference do
     )
 
     inference.should_not be_nil
-    inference = inference.not_nil!
+    inference = inference.unwrap!
     inference.types_for("message").should eq(["String"])
     inference.types_for("selected").should eq(["String"])
   end
@@ -679,7 +680,7 @@ describe Crystalline::Lightweight::Inference do
     )
 
     inference.should_not be_nil
-    inference = inference.not_nil!
+    inference = inference.unwrap!
     inference.types_for("server").should eq(["LSP::Server"])
     inference.types_for("project").should contain("Project")
   end
@@ -716,7 +717,7 @@ describe Crystalline::Lightweight::Inference do
     )
 
     inference.should_not be_nil
-    inference = inference.not_nil!
+    inference = inference.unwrap!
     inference.types_for("target").should eq(["String"])
   end
 
@@ -746,6 +747,6 @@ describe Crystalline::Lightweight::Inference do
 
     inference.should_not be_nil
     # The index records no ivars; the ||= block's hash literal types it.
-    inference.not_nil!.types_for_instance_var("@values").should eq(["Hash(String, String)"])
+    inference.unwrap!.types_for_instance_var("@values").should eq(["Hash(String, String)"])
   end
 end

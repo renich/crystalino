@@ -1,3 +1,4 @@
+require "../support/unwrap"
 require "spec"
 require "../../src/crystalline/requires"
 require "../../src/crystalline/main"
@@ -23,8 +24,8 @@ end
 private def lightweight_query_for_repo_file(rel : String, source : String) : Crystalline::Lightweight::Query
   path = File.join(repo_root, rel)
   project = Crystalline::Project.new(URI.parse("file://#{repo_root}"))
-  overlay = Crystalline::Lightweight::Index.from_source(source, path).not_nil!
-  Crystalline::Lightweight::Query.new(project.source_index.not_nil!, secondary: prelude_index, overlay: overlay)
+  overlay = Crystalline::Lightweight::Index.from_source(source, path).unwrap!
+  Crystalline::Lightweight::Query.new(project.source_index.unwrap!, secondary: prelude_index, overlay: overlay)
 end
 
 Crystalline::EnvironmentConfig.run
@@ -43,7 +44,7 @@ describe Crystalline::Lightweight do
       types = [] of Array(String)
       3.times do
         inference = Crystalline::Lightweight::Inference.for(source, li + 1, 10, query)
-        types << inference.not_nil!.types_for("node").sort
+        types << inference.unwrap!.types_for("node").sort
       end
 
       types[0].should eq(["Crystal::Expressions"])
@@ -63,7 +64,7 @@ describe Crystalline::Lightweight do
       hov2.should_not be_nil
 
       inference = Crystalline::Lightweight::Inference.for(source, li + 1, col + 1, query)
-      inference.not_nil!.types_for("token").should contain("Crystal::Token")
+      inference.unwrap!.types_for("token").should contain("Crystal::Token")
     end
   end
 end

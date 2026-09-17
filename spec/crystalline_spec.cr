@@ -1,3 +1,4 @@
+require "./support/unwrap"
 require "spec"
 
 it "works" do

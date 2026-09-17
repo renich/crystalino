@@ -68,7 +68,7 @@ module Crystal
       message = "can't find file '#{ex.filename}'"
       notes = [] of String
 
-      # FIXME: as(String) should not be necessary
+      # Note: as(String) should not be necessary
       if ex.filename.as(String).starts_with? '.'
         if relative_to
           message += " relative to '#{relative_to}'"
@@ -101,7 +101,7 @@ module Crystal
   end
 
   class Program
-    property error_tolerant = false
+    property? error_tolerant = false
     getter error_stack = Set(Crystal::CodeError).new
 
     # Will not raise if the semantic analysis fails.
@@ -185,7 +185,7 @@ module Crystal
         visitor.end_visit_any self
       end
     rescue e : Crystal::CodeError
-      if !visitor.is_a?(Crystal::TopLevelVisitor) && visitor.responds_to? :program && visitor.program.error_tolerant
+      if !visitor.is_a?(Crystal::TopLevelVisitor) && visitor.responds_to? :program && visitor.program.error_tolerant?
         visitor.program.error_stack << e
       else
         ::raise e

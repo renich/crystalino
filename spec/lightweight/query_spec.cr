@@ -1,3 +1,4 @@
+require "../support/unwrap"
 require "spec"
 require "../../src/crystalline/requires"
 require "../../src/crystalline/main"
@@ -78,7 +79,7 @@ describe Crystalline::Lightweight::Query do
 
     # A same-signature redefinition at a different location wins.
     hello = query.methods_for("Greeter").find(&.name.==("hello")).should_not be_nil
-    hello.not_nil!.return_type.should eq("String")
+    hello.unwrap!.return_type.should eq("String")
 
     # Base methods that are not redefined are preserved, and overlay-only
     # methods are added.
@@ -92,7 +93,7 @@ describe Crystalline::Lightweight::Query do
     query.top_level_methods.map(&.name).should contain("top_level_new")
     query.top_level_methods.map(&.name).should contain("top_level_old")
     shared = query.top_level_methods.find(&.name.==("top_level_shared")).should_not be_nil
-    shared.not_nil!.return_type.should eq("String")
+    shared.unwrap!.return_type.should eq("String")
   end
 
   it "keeps the base method when the overlay redefinition shares its location" do
@@ -109,7 +110,7 @@ describe Crystalline::Lightweight::Query do
 
     query = Crystalline::Lightweight::Query.new(base, overlay: overlay)
     hello = query.methods_for("Greeter").find(&.name.==("hello")).should_not be_nil
-    hello.not_nil!.return_type.should eq("Int32")
+    hello.unwrap!.return_type.should eq("Int32")
   end
 
   it "resolves types and methods from the secondary index" do
