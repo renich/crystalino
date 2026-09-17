@@ -6,12 +6,12 @@ WORKDIR /app
 RUN apk add --update --no-cache --force-overwrite \
       llvm20-dev llvm20-static g++ libxml2-static zstd-static make
 
-# Build crystalline.
+# Build crystalino.
 COPY . /app/
 
 RUN git clone -b 1.21.0 --depth=1 https://github.com/crystal-lang/crystal \
       && make -C crystal llvm_ext \
-      && CRYSTAL_PATH=crystal/src:lib shards build crystalline \
+      && CRYSTAL_PATH=crystal/src:lib shards build crystalino \
       --no-debug --progress --stats --production --static --release \
       --ignore-crystal-version \
       && rm -rf crystal

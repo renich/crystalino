@@ -3,8 +3,8 @@
   <h1>Crystalino</h1>
   <p><strong>The High-Performance, Next-Generation Language Server for Crystal</strong></p>
 
-  <a href="https://github.com/renich/crystalline/actions?query=branch%3Amaster+workflow%3ABuild"><img alt="Build Status" src="https://github.com/renich/crystalline/workflows/Build/badge.svg?branch=master"></a>
-  <a href="https://github.com/renich/crystalline/tags"><img alt="GitHub tag (latest SemVer)" src="https://img.shields.io/github/v/tag/renich/crystalline"></a>
+  <a href="https://github.com/renich/crystalino/actions?query=branch%3Amaster+workflow%3ABuild"><img alt="Build Status" src="https://github.com/renich/crystalino/workflows/Build/badge.svg?branch=master"></a>
+  <a href="https://github.com/renich/crystalino/tags"><img alt="GitHub tag (latest SemVer)" src="https://img.shields.io/github/v/tag/renich/crystalino"></a>
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/License-MIT-blue.svg"></a>
   <a href="https://crystal-lang.org"><img alt="Crystal: >= 1.21" src="https://img.shields.io/badge/Crystal-%3E%3D%201.21-black.svg"></a>
 </div>
@@ -64,11 +64,11 @@ Crystalino implements comprehensive Language Server Protocol capabilities:
 
 ### Pre-Built Binaries
 
-Pre-compiled, statically linked binaries are available on the [Releases Page](https://github.com/renich/crystalline/releases):
+Pre-compiled, statically linked binaries are available on the [Releases Page](https://github.com/renich/crystalino/releases):
 
 ```bash
 # Download and extract the latest Linux x86_64 binary
-wget https://github.com/renich/crystalline/releases/latest/download/crystalline_x86_64-unknown-linux-musl.gz -O crystalino.gz
+wget https://github.com/renich/crystalino/releases/latest/download/crystalino_x86_64-unknown-linux-musl.gz -O crystalino.gz
 gzip -d crystalino.gz
 chmod u+x crystalino
 sudo mv crystalino /usr/local/bin/crystalino
@@ -79,7 +79,7 @@ sudo mv crystalino /usr/local/bin/crystalino
 Requirements: Crystal $\ge 1.21.0$ and system `llvm-config`.
 
 ```bash
-git clone https://github.com/renich/crystalline.git crystalino
+git clone https://github.com/renich/crystalino.git
 cd crystalino
 shards install
 

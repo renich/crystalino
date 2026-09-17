@@ -7,7 +7,7 @@ module Crystalino
       log_level = ::Log::Severity::Warn
 
       OptionParser.parse(args) do |parser|
-        parser.banner = "Usage: crystalline [options]"
+        parser.banner = "Usage: crystalino [options]"
 
         parser.on("-v", "--version", "Show version") do
           puts Crystalino::VERSION
@@ -24,7 +24,7 @@ module Crystalino
         end
 
         parser.on("--stdio", "Use standard I/O (default)") do
-          # No-op: standard I/O is the only transport supported by crystalline
+          # No-op: standard I/O is the only transport supported by crystalino
         end
 
         parser.invalid_option do |flag|

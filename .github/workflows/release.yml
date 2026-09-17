@@ -37,27 +37,27 @@ jobs:
           fi
           echo "Using LLVM_CONFIG: $LLVM_CONFIG"
           export PATH="$(dirname "$LLVM_CONFIG"):$PATH"
-          shards build crystalline --release --no-debug --stats --progress --ignore-crystal-version
+          shards build crystalino --release --no-debug --stats --progress --ignore-crystal-version
       - name: Upload a Build Artifact
         uses: actions/upload-artifact@v7.0.1
         with:
-          name: crystalline_${{ matrix.arch }}-apple-darwin
-          path: ./bin/crystalline
+          name: crystalino_${{ matrix.arch }}-apple-darwin
+          path: ./bin/crystalino
   linux:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6.0.2
       - name: Build the static binary
-        run: podman build -t crystalline -f Containerfile .
+        run: podman build -t crystalino -f Containerfile .
       - name: Copy binary to host
         run: |
-          podman run -v $PWD:/app/host:z --rm crystalline:latest cp ./bin/crystalline ./host/crystalline
+          podman run -v $PWD:/app/host:z --rm crystalino:latest cp ./bin/crystalino ./host/crystalino
       - name: Upload a Build Artifact
         uses: actions/upload-artifact@v7.0.1
         with:
-          name: crystalline_x86_64-unknown-linux-musl
-          path: ./crystalline
+          name: crystalino_x86_64-unknown-linux-musl
+          path: ./crystalino
   release:
     needs: [macos, linux]
     runs-on: ubuntu-latest
@@ -71,13 +71,13 @@ jobs:
       - name: Compress and rename artifacts
         run: |
           gzip -r ./artifacts
-          mv ./artifacts/crystalline_x86_64-unknown-linux-musl/crystalline.gz ./artifacts/crystalline_x86_64-unknown-linux-musl.gz
-          mv ./artifacts/crystalline_x86_64-apple-darwin/crystalline.gz ./artifacts/crystalline_x86_64-apple-darwin.gz
-          mv ./artifacts/crystalline_arm64-apple-darwin/crystalline.gz ./artifacts/crystalline_arm64-apple-darwin.gz
+          mv ./artifacts/crystalino_x86_64-unknown-linux-musl/crystalino.gz ./artifacts/crystalino_x86_64-unknown-linux-musl.gz
+          mv ./artifacts/crystalino_x86_64-apple-darwin/crystalino.gz ./artifacts/crystalino_x86_64-apple-darwin.gz
+          mv ./artifacts/crystalino_arm64-apple-darwin/crystalino.gz ./artifacts/crystalino_arm64-apple-darwin.gz
       - name: Create GitHub release
         uses: softprops/action-gh-release@v3.0.0
         with:
           files: |
-            ./artifacts/crystalline_x86_64-unknown-linux-musl.gz
-            ./artifacts/crystalline_x86_64-apple-darwin.gz
-            ./artifacts/crystalline_arm64-apple-darwin.gz
+            ./artifacts/crystalino_x86_64-unknown-linux-musl.gz
+            ./artifacts/crystalino_x86_64-apple-darwin.gz
+            ./artifacts/crystalino_arm64-apple-darwin.gz

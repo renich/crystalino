@@ -2,12 +2,12 @@
 Contributing
 ============
 
-We welcome contributions to ``crystalline``! Please follow these guidelines to make the process smooth for everyone.
+We welcome contributions to ``crystalino``! Please follow these guidelines to make the process smooth for everyone.
 
 Getting Started
 ===============
 
-#. Fork the repository on GitHub: `<https://github.com/renich/crystalline/fork>`_.
+#. Fork the repository on GitHub: `<https://github.com/renich/crystalino/fork>`_.
 #. Clone your fork locally.
 #. Create a new branch for your changes:
 
@@ -18,9 +18,9 @@ Getting Started
 Environment Setup
 =================
 
-Crystalline requires LLVM to be installed and available on your system in order to run semantic analysis and build.
+Crystalino requires modern Crystal (>= 1.21.0) and system LLVM development libraries to run semantic analysis and build.
 
-On some systems, the compiler may need help finding the ``llvm-config`` binary. You can set the ``LLVM_CONFIG`` environment variable:
+On some systems, the compiler may need help locating the ``llvm-config`` binary. You can set the ``LLVM_CONFIG`` environment variable:
 
 .. code-block:: bash
 
@@ -38,87 +38,89 @@ To install development dependencies:
 Codebase Architecture
 =====================
 
-A brief map of the repository's files to help you navigate:
+Crystalino enforces strict domain boundaries:
 
-* **src/crystalline.cr**: The CLI entry point where options (using ``OptionParser``) are parsed.
-* **src/crystalline/main.cr**: Initializes and boots the LSP server.
-* **src/crystalline/controller.cr**: Handles incoming LSP requests and routes them to workspace actions.
-* **src/crystalline/workspace.cr**: Manages document collections, compiler sessions, and code diagnostics.
-* **src/crystalline/ext/**: Contains overrides, monkeypatches, and Boehm GC tuning for compiler integration.
-* **spec/**: Contains integration and unit specs for the Language Server.
+* **src/crystalino_main.cr**: CLI executable entry point parsing command-line flags.
+* **src/crystalino.cr**: Library root providing the public API and embedding entry point.
+* **src/crystalino/main.cr**: Server lifecycle bootstrapper and JSON-RPC transport loop.
+* **src/crystalino/controller.cr**: JSON-RPC request dispatcher and LSP method routing.
+* **src/crystalino/workspace.cr**: LSP workspace orchestrator coordinating document sync, multi-project resolution, and two-tier caching.
+* **src/crystalino/analysis/**: Compiler execution on dedicated parallel execution contexts, diagnostics, and AST visitors.
+* **src/crystalino/lightweight/**: Sub-millisecond syntax-level symbol indexing, autocompletion, hover, definitions, signature help, folding, selection, and symbols.
+* **src/crystalino/formatter/**: Signature and source code formatters.
+* **src/crystalino/ext/**: LSP protocol type extensions (semantic tokens, folding ranges).
+* **spec/**: Comprehensive test suites (unit, protocol, and integration specs).
 
 Development Workflow
 ====================
 
-To speed up development, you can use `Sentry <https://github.com/samueleaton/sentry>`_ to rebuild the server automatically on file changes:
+To build the project:
 
 .. code-block:: bash
 
-   # Build Sentry once
-   shards build --release sentry
-   # Run Sentry to watch the filesystem and auto-compile crystalline in debug mode
-   ./bin/sentry -i
-
-To build the project manually:
-
-.. code-block:: bash
-
-   shards build crystalline          # Debug build
-   shards build crystalline --release # Production/Release build
+   shards build crystalino                                       # Debug build
+   shards build crystalino --release --no-debug --mcpu=native    # Optimized release build
 
 Formatting & Linting
 ====================
 
-Always run the formatter and linter before committing your changes:
+Always run the formatter, linter, and documentation checker before committing:
 
 .. code-block:: bash
 
-   crystal tool format
+   crystal tool format --check
    ./bin/ameba
+   rstcheck CHANGELOG.rst CONTRIBUTING.rst CODE_OF_HONOR.rst
+
+We maintain a strict **zero-suppression policy**: never bypass linter rules with ``# ameba:disable``. Fix the root issue or extract small, single-purpose helper functions.
 
 Debugging & Testing
 ===================
 
-To run the test suite:
+To run the complete test suite:
 
 .. code-block:: bash
 
    crystal spec
 
-Since LSP servers communicate over stdin/stdout, standard ``puts`` statements can break the JSON-RPC protocol. Instead, use the built-in LSP logger to print diagnostic information:
+Since LSP servers communicate over stdin/stdout, standard ``puts`` statements break JSON-RPC framing. Use the built-in LSP logger to print diagnostic information:
 
 .. code-block:: crystal
 
    LSP::Log.info { "Debugging value: #{my_var}" }
 
-You can enable verbose debug logging by launching crystalline with the log level flag:
+Launch Crystalino with verbose debug logging enabled:
 
 .. code-block:: bash
 
-   ./bin/crystalline -l debug
+   ./bin/crystalino -l debug
 
 Commit Guidelines
 =================
 
-We use `Conventional Commits <https://www.conventionalcommits.org/>`_. Please format your commit messages as follows:
+We strictly follow `Conventional Commits <https://www.conventionalcommits.org/>`_. Format your commit messages with an imperative title, wrapped bodies at 72 characters, and required trailers:
 
 .. code-block:: text
 
-   type(scope): description
+   type(scope): imperative description
 
-   Body description (optional)
+   Detailed explanation of rationale and changes wrapped at 72 characters.
+   Do not use spaces around forward slashes (e.g. word/word).
+
+   Co-developed-by: Gemini AI <renich+gemini@woralelandia.com>
+   Signed-off-by: Rénich Bon Ćirić <renich@woralelandia.com>
 
 * **Types**: ``feat``, ``fix``, ``docs``, ``style``, ``refactor``, ``perf``, ``test``, ``chore``.
-* **Mood**: Use the imperative mood ("add feature" instead of "added feature").
+* **Mood**: Imperative mood ("add feature", never "added feature").
 
 Submitting a Pull Request
 =========================
 
-#. Push your branch to GitHub:
+#. Push your branch to your GitHub fork:
 
    .. code-block:: bash
 
       git push origin feature/my-cool-feature
 
-#. Open a Pull Request against the ``master`` branch of the main repository.
-#. Describe your changes clearly and link to any related issues.
+#. Open a Pull Request against the ``master`` branch of `renich/crystalino <https://github.com/renich/crystalino>`_.
+#. Provide an empirical description of changes, test coverage, and benchmark impacts.

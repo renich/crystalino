@@ -30,7 +30,7 @@ class Crystalino::Project
   # Determines the project entry point.
   getter? entry_point : URI? do
     shard_name = shard_yaml["name"].as_s
-    # If shard.yml has the `crystalline/main` key, use that.
+    # If shard.yml has the `crystalino/main` key, use that.
     relative_main = shard_yaml.dig?("crystalino", "main").try &.as_s
     # Else if shard.yml has a `targets/[shard name]/main` key, use that.
     relative_main ||= shard_yaml.dig?("targets", shard_name, "main").try &.as_s
