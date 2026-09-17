@@ -1,15 +1,7 @@
 require "json"
+require "lsp/server"
 
 module LSP
-  macro finished
-    # The workspace symbol request is sent from the client to the server to
-    # list project-wide symbols matching the query string.
-    class WorkspaceSymbolRequest < RequestMessage(Array(SymbolInformation)?)
-      @method = "workspace/symbol"
-      property params : WorkspaceSymbolParams
-    end
-  end
-
   struct WorkspaceSymbolParams
     include WorkDoneProgressParams
     include PartialResultParams
@@ -19,5 +11,12 @@ module LSP
     # A query string to filter symbols by. Clients may send an empty
     # string here to request all symbols.
     property query : String
+  end
+
+  # The workspace symbol request is sent from the client to the server to
+  # list project-wide symbols matching the query string.
+  class WorkspaceSymbolRequest < RequestMessage(Array(SymbolInformation)?)
+    @method = "workspace/symbol"
+    property params : WorkspaceSymbolParams
   end
 end

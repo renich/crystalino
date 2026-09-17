@@ -1,12 +1,12 @@
 name: crystalline
-version: 0.19.0
+version: 0.19.1
 
 authors:
   - Julien Elbaz <elbywan@hotmail.com>
 
 targets:
   crystalline:
-    main: src/crystalline.cr
+    main: src/crystalline_main.cr
   sentry:
     main: lib/sentry/src/sentry_cli.cr
 

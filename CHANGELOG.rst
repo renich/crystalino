@@ -7,8 +7,29 @@ All notable changes to this project will be documented in this file.
 The format is based on `Keep a Changelog <https://keepachangelog.com/en/1.1.0/>`_,
 and this project adheres to `Semantic Versioning <https://semver.org/spec/v2.0.0.html>`_.
 
-Unreleased
-==========
+[0.19.1] - 2026-09-17
+=====================
+
+Added
+-----
+* LSP Signature Help (``textDocument/signatureHelp``): Real-time parameter hints, active parameter detection across commas, and default argument rendering tolerant of partial typing buffers.
+* LSP Document Highlight (``textDocument/documentHighlight``): Scoped AST-aware highlight provider distinguishing symbol reads and writes for local variables, instance variables, class variables, methods, types, and constants.
+* LSP Folding Range (``textDocument/foldingRange``): Folding region detection for classes, modules, structs, enums, methods, macros, multiline blocks, control flow, multiline strings/heredocs, comments, and import blocks with indentation fallback.
+* LSP Selection Range (``textDocument/selectionRange``): Smart expanding hierarchical selection ranges with multi-cursor support.
+* JSON-RPC Wire Protocol Test Suite: Comprehensive framing, deserialization, and serialization verification.
+
+Changed
+-------
+* Modular CLI Architecture: Decoupled CLI argument parser into ``Crystalline::CLI`` with dedicated executable target ``src/crystalline_main.cr``, allowing ``src/crystalline.cr`` to be cleanly imported as a library without blocking STDIN.
+* Request Discriminator Registration: Centralized extended LSP RequestMessage JSON discriminator registrations in ``macro finished`` to properly deserialize extended wire methods.
+
+Fixed
+-----
+* Boehm GC Signal Conflict: Fixed intermittent ``signal 11`` crashes by reverting experimental incremental collection (``mprotect_vdb``) that interfered with Crystal runtime signal handling.
+* Wire-Level Request Dropping: Fixed issue where extended requests (``workspace/symbol``, etc.) were parsed as ``UnknownRequest`` due to missing JSON discriminator mappings.
+
+[0.19.0] - 2026-09-16
+=====================
 
 Added
 -----
