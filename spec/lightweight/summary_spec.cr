@@ -7,7 +7,7 @@ require "../../src/crystalino/lightweight/completion"
 require "../../src/crystalino/lightweight/summary"
 
 private def build_query_with_summary(source : String)
-  path = File.join(Dir.tempdir, "crystalline-lightweight-summary-#{Random::Secure.hex(8)}.cr")
+  path = File.join(Dir.tempdir, "crystalino-lightweight-summary-#{Random::Secure.hex(8)}.cr")
   File.write(path, source)
 
   begin

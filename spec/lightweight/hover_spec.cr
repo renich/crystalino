@@ -5,7 +5,7 @@ require "../../src/crystalino/main"
 require "../../src/crystalino/lightweight/hover"
 
 private def build_lightweight_hover_query(source : String)
-  path = File.join(Dir.tempdir, "crystalline-lightweight-hover-#{Random::Secure.hex(8)}.cr")
+  path = File.join(Dir.tempdir, "crystalino-lightweight-hover-#{Random::Secure.hex(8)}.cr")
   File.write(path, source)
 
   begin

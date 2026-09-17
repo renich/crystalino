@@ -5,7 +5,7 @@ require "../src/crystalino/project"
 
 describe Crystalino::Project do
   it "does not match unrelated files once dependencies are known" do
-    root = File.join(Dir.tempdir, "crystalline-project-spec-#{Random::Secure.hex(8)}")
+    root = File.join(Dir.tempdir, "crystalino-project-spec-#{Random::Secure.hex(8)}")
     begin
       Dir.mkdir_p(root)
       project = Crystalino::Project.new(URI.parse("file://#{root}"))

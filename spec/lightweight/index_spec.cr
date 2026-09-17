@@ -5,7 +5,7 @@ require "../../src/crystalino/main"
 require "../../src/crystalino/lightweight/query"
 
 private def build_lightweight_index(source : String)
-  path = File.join(Dir.tempdir, "crystalline-lightweight-index-#{Random::Secure.hex(8)}.cr")
+  path = File.join(Dir.tempdir, "crystalino-lightweight-index-#{Random::Secure.hex(8)}.cr")
   File.write(path, source)
 
   begin

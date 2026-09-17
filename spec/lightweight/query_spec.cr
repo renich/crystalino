@@ -9,7 +9,7 @@ private def index_from_source(source : String) : Crystalino::Lightweight::Index
 end
 
 private def build_lightweight_index(source : String)
-  path = File.join(Dir.tempdir, "crystalline-lightweight-query-#{Random::Secure.hex(8)}.cr")
+  path = File.join(Dir.tempdir, "crystalino-lightweight-query-#{Random::Secure.hex(8)}.cr")
   File.write(path, source)
 
   begin

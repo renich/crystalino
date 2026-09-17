@@ -12,7 +12,7 @@ describe Crystalino::Lightweight::PreludeIndex do
     original.types.size.should be > 500
     original.types["String"]?.should_not be_nil
 
-    path = File.join(Dir.tempdir, "crystalline-prelude-test-#{Random::Secure.hex(8)}.bin")
+    path = File.join(Dir.tempdir, "crystalino-prelude-test-#{Random::Secure.hex(8)}.bin")
     begin
       Crystalino::Lightweight::PreludeIndex.save_to_cache_for_test(original, path)
       loaded = Crystalino::Lightweight::PreludeIndex.load_from_cache_for_test(path)

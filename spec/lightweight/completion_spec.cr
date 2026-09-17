@@ -6,7 +6,7 @@ require "../../src/crystalino/completion_context"
 require "../../src/crystalino/lightweight/completion"
 
 private def build_lightweight_query(source : String)
-  path = File.join(Dir.tempdir, "crystalline-lightweight-completion-#{Random::Secure.hex(8)}.cr")
+  path = File.join(Dir.tempdir, "crystalino-lightweight-completion-#{Random::Secure.hex(8)}.cr")
   File.write(path, source)
 
   begin

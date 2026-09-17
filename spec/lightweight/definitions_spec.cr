@@ -11,7 +11,7 @@ private def build_definition_query(source : String)
 end
 
 private def build_program_definition_query(source : String)
-  path = File.join(Dir.tempdir, "crystalline-lightweight-definitions-#{Random::Secure.hex(8)}.cr")
+  path = File.join(Dir.tempdir, "crystalino-lightweight-definitions-#{Random::Secure.hex(8)}.cr")
   File.write(path, source)
 
   begin

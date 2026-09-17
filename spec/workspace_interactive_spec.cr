@@ -5,7 +5,7 @@ require "../src/crystalino/requires"
 require "../src/crystalino/main"
 
 private def with_workspace_document(source : String, &)
-  root = File.join(Dir.tempdir, "crystalline-workspace-interactive-#{Random::Secure.hex(8)}")
+  root = File.join(Dir.tempdir, "crystalino-workspace-interactive-#{Random::Secure.hex(8)}")
   Dir.mkdir_p(root)
   path = File.join(root, "src", "main.cr")
   Dir.mkdir_p(File.dirname(path))

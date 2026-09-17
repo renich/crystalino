@@ -277,7 +277,7 @@ module Crystalino::Lightweight
     # built on the compiler (like this LSP itself) would otherwise have no
     # lightweight info for those receivers until the first compile.
     def self.generate : Index?
-      path = File.join(Dir.tempdir, "crystalline-prelude-#{Random::Secure.hex(8)}.cr")
+      path = File.join(Dir.tempdir, "crystalino-prelude-#{Random::Secure.hex(8)}.cr")
       File.write(path, "puts \"hello\"\n")
       Crystalino::EnvironmentConfig.run
       server = LSP::Server.new(IO::Memory.new, IO::Memory.new)
