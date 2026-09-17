@@ -21,6 +21,7 @@ Added
 
 Added
 -----
+* LSP Workspace Symbols (``workspace/symbol``): Project-wide symbol search powered by the lightweight AST index.
 * LSP Signature Help (``textDocument/signatureHelp``): Real-time parameter hints, active parameter detection across commas, and default argument rendering tolerant of partial typing buffers.
 * LSP Document Highlight (``textDocument/documentHighlight``): Scoped AST-aware highlight provider distinguishing symbol reads and writes for local variables, instance variables, class variables, methods, types, and constants.
 * LSP Folding Range (``textDocument/foldingRange``): Folding region detection for classes, modules, structs, enums, methods, macros, multiline blocks, control flow, multiline strings/heredocs, comments, and import blocks with indentation fallback.
@@ -31,6 +32,7 @@ Changed
 -------
 * Modular CLI Architecture: Decoupled CLI argument parser into ``Crystalline::CLI`` with dedicated executable target ``src/crystalline_main.cr``, allowing ``src/crystalline.cr`` to be cleanly imported as a library without blocking STDIN.
 * Request Discriminator Registration: Centralized extended LSP RequestMessage JSON discriminator registrations in ``macro finished`` to properly deserialize extended wire methods.
+* Static Analysis Hardening: Refactored complex methods and eliminated 100% of Ameba CyclomaticComplexity and ``Lint/NotNil`` violations across the core architecture.
 
 Fixed
 -----
