@@ -1,12 +1,12 @@
 require "../support/unwrap"
 require "spec"
-require "../../src/crystalline/requires"
-require "../../src/crystalline/main"
-require "../../src/crystalline/lightweight/prelude_index"
+require "../../src/crystalino/requires"
+require "../../src/crystalino/main"
+require "../../src/crystalino/lightweight/prelude_index"
 
-describe Crystalline::Lightweight::PreludeIndex do
+describe Crystalino::Lightweight::PreludeIndex do
   it "round-trips the prelude index through the cache format" do
-    original = Crystalline::Lightweight::PreludeIndex.generate
+    original = Crystalino::Lightweight::PreludeIndex.generate
     original.should_not be_nil
     original = original.unwrap!
     original.types.size.should be > 500
@@ -14,8 +14,8 @@ describe Crystalline::Lightweight::PreludeIndex do
 
     path = File.join(Dir.tempdir, "crystalline-prelude-test-#{Random::Secure.hex(8)}.bin")
     begin
-      Crystalline::Lightweight::PreludeIndex.save_to_cache_for_test(original, path)
-      loaded = Crystalline::Lightweight::PreludeIndex.load_from_cache_for_test(path)
+      Crystalino::Lightweight::PreludeIndex.save_to_cache_for_test(original, path)
+      loaded = Crystalino::Lightweight::PreludeIndex.load_from_cache_for_test(path)
       loaded.should_not be_nil
       loaded = loaded.unwrap!
 
@@ -38,13 +38,13 @@ describe Crystalline::Lightweight::PreludeIndex do
   end
 
   it "indexes aliases with the aliased type as their parent" do
-    index = Crystalline::Lightweight::PreludeIndex.generate
+    index = Crystalino::Lightweight::PreludeIndex.generate
     index.should_not be_nil
     index = index.unwrap!
 
     mutex = index.types["Mutex"]?
     mutex.should_not be_nil
-    mutex.unwrap!.kind.should eq(Crystalline::Lightweight::TypeKind::Alias)
+    mutex.unwrap!.kind.should eq(Crystalino::Lightweight::TypeKind::Alias)
     mutex.unwrap!.parent_types.should contain("Sync::Mutex")
   end
 end

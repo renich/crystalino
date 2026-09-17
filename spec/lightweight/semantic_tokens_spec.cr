@@ -1,12 +1,12 @@
 require "../support/unwrap"
 require "spec"
-require "../../src/crystalline/requires"
-require "../../src/crystalline/main"
-require "../../src/crystalline/lightweight/semantic_tokens"
+require "../../src/crystalino/requires"
+require "../../src/crystalino/main"
+require "../../src/crystalino/lightweight/semantic_tokens"
 
-describe Crystalline::Lightweight::SemanticTokens do
+describe Crystalino::Lightweight::SemanticTokens do
   it "provides a valid legend with standard token types and modifiers" do
-    legend = Crystalline::Lightweight::SemanticTokens.legend
+    legend = Crystalino::Lightweight::SemanticTokens.legend
     legend.token_types.should contain("class")
     legend.token_types.should contain("method")
     legend.token_types.should contain("variable")
@@ -29,7 +29,7 @@ describe Crystalline::Lightweight::SemanticTokens do
     end
     CRYSTAL
 
-    tokens = Crystalline::Lightweight::SemanticTokens.tokens(source)
+    tokens = Crystalino::Lightweight::SemanticTokens.tokens(source)
     tokens.should_not be_nil
     tok = tokens.unwrap!
     data = tok.data
@@ -49,12 +49,12 @@ describe Crystalline::Lightweight::SemanticTokens do
       delta_start.should be >= 0
       length.should be > 0
       token_type.should be >= 0
-      token_type.should be < Crystalline::Lightweight::SemanticTokens::TOKEN_TYPES.size
+      token_type.should be < Crystalino::Lightweight::SemanticTokens::TOKEN_TYPES.size
     end
   end
 
   it "returns nil on empty source" do
-    Crystalline::Lightweight::SemanticTokens.tokens("").should be_nil
+    Crystalino::Lightweight::SemanticTokens.tokens("").should be_nil
   end
 
   it "extracts tokens from broken / incomplete source buffers" do
@@ -64,7 +64,7 @@ describe Crystalline::Lightweight::SemanticTokens do
         x = 1
     CRYSTAL
 
-    tokens = Crystalline::Lightweight::SemanticTokens.tokens(source)
+    tokens = Crystalino::Lightweight::SemanticTokens.tokens(source)
     tokens.should_not be_nil
     tok = tokens.unwrap!
     tok.data.should_not be_empty

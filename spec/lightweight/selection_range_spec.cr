@@ -1,10 +1,10 @@
 require "../support/unwrap"
 require "spec"
-require "../../src/crystalline/requires"
-require "../../src/crystalline/main"
-require "../../src/crystalline/lightweight/selection_range"
+require "../../src/crystalino/requires"
+require "../../src/crystalino/main"
+require "../../src/crystalino/lightweight/selection_range"
 
-describe Crystalline::Lightweight::SelectionRange do
+describe Crystalino::Lightweight::SelectionRange do
   it "builds an expanding selection hierarchy from innermost node to whole document" do
     source = <<-CRYSTAL
     class Calculator
@@ -17,7 +17,7 @@ describe Crystalline::Lightweight::SelectionRange do
 
     # Cursor on 'b' in 'total = a + b' (line 2, col 16)
     pos = LSP::Position.new(line: 2, character: 16)
-    ranges = Crystalline::Lightweight::SelectionRange.selection_ranges(source, [pos])
+    ranges = Crystalino::Lightweight::SelectionRange.selection_ranges(source, [pos])
     ranges.should_not be_nil
     list = ranges.unwrap!
     list.size.should eq(1)
@@ -62,7 +62,7 @@ describe Crystalline::Lightweight::SelectionRange do
     pos1 = LSP::Position.new(line: 1, character: 2)
     pos2 = LSP::Position.new(line: 5, character: 2)
 
-    ranges = Crystalline::Lightweight::SelectionRange.selection_ranges(source, [pos1, pos2])
+    ranges = Crystalino::Lightweight::SelectionRange.selection_ranges(source, [pos1, pos2])
     ranges.should_not be_nil
     list = ranges.unwrap!
     list.size.should eq(2)
@@ -79,7 +79,7 @@ describe Crystalline::Lightweight::SelectionRange do
     CRYSTAL
 
     pos = LSP::Position.new(line: 0, character: 7)
-    ranges = Crystalline::Lightweight::SelectionRange.selection_ranges(source, [pos])
+    ranges = Crystalino::Lightweight::SelectionRange.selection_ranges(source, [pos])
     ranges.should_not be_nil
     list = ranges.unwrap!
     list.size.should eq(1)
@@ -90,8 +90,8 @@ describe Crystalline::Lightweight::SelectionRange do
 
   it "returns nil for empty source or empty positions" do
     pos = LSP::Position.new(line: 0, character: 0)
-    Crystalline::Lightweight::SelectionRange.selection_ranges("", [pos]).should be_nil
-    Crystalline::Lightweight::SelectionRange.selection_ranges("def foo; end", [] of LSP::Position).should be_nil
+    Crystalino::Lightweight::SelectionRange.selection_ranges("", [pos]).should be_nil
+    Crystalino::Lightweight::SelectionRange.selection_ranges("def foo; end", [] of LSP::Position).should be_nil
   end
 
   it "handles incomplete / broken syntax gracefully" do
@@ -101,7 +101,7 @@ describe Crystalline::Lightweight::SelectionRange do
     CRYSTAL
 
     pos = LSP::Position.new(line: 1, character: 4)
-    ranges = Crystalline::Lightweight::SelectionRange.selection_ranges(source, [pos])
+    ranges = Crystalino::Lightweight::SelectionRange.selection_ranges(source, [pos])
     ranges.should_not be_nil
     list = ranges.unwrap!
     list.size.should eq(1)

@@ -1,10 +1,10 @@
 require "../support/unwrap"
 require "spec"
-require "../../src/crystalline/requires"
-require "../../src/crystalline/main"
-require "../../src/crystalline/lightweight/rename"
+require "../../src/crystalino/requires"
+require "../../src/crystalino/main"
+require "../../src/crystalino/lightweight/rename"
 
-describe Crystalline::Lightweight::Rename do
+describe Crystalino::Lightweight::Rename do
   it "prepares rename on a valid identifier" do
     source = <<-CRYSTAL
     def calculate(value : Int32)
@@ -14,7 +14,7 @@ describe Crystalline::Lightweight::Rename do
     CRYSTAL
 
     # Cursor on 'total' in 'total = value * 2' (line 1, character 2)
-    prep = Crystalline::Lightweight::Rename.prepare_rename(source, 1, 2)
+    prep = Crystalino::Lightweight::Rename.prepare_rename(source, 1, 2)
     prep.should_not be_nil
     res = prep.unwrap!
     res.placeholder.should eq("total")
@@ -31,10 +31,10 @@ describe Crystalline::Lightweight::Rename do
     CRYSTAL
 
     # Cursor on 'def' (line 0, col 0)
-    Crystalline::Lightweight::Rename.prepare_rename(source, 0, 0).should be_nil
+    Crystalino::Lightweight::Rename.prepare_rename(source, 0, 0).should be_nil
 
     # Cursor on whitespace (line 0, col 3)
-    Crystalline::Lightweight::Rename.prepare_rename(source, 0, 3).should be_nil
+    Crystalino::Lightweight::Rename.prepare_rename(source, 0, 3).should be_nil
   end
 
   it "renames local variable strictly within enclosing method scope" do
@@ -53,7 +53,7 @@ describe Crystalline::Lightweight::Rename do
 
     uri = URI.parse("file:///project/calc.cr")
     # Rename 'total' in calculate to 'sum' (line 1, character 2)
-    edit = Crystalline::Lightweight::Rename.rename(source, uri, 1, 2, "sum")
+    edit = Crystalino::Lightweight::Rename.rename(source, uri, 1, 2, "sum")
     edit.should_not be_nil
     ws_edit = edit.unwrap!
     changes = ws_edit.changes[uri.to_s]
@@ -80,7 +80,7 @@ describe Crystalline::Lightweight::Rename do
 
     uri = URI.parse("file:///project/counter.cr")
     # Rename '@count' with 'tally' (without @ in input)
-    edit = Crystalline::Lightweight::Rename.rename(source, uri, 1, 2, "tally")
+    edit = Crystalino::Lightweight::Rename.rename(source, uri, 1, 2, "tally")
     edit.should_not be_nil
     ws_edit = edit.unwrap!
     changes = ws_edit.changes[uri.to_s]
@@ -101,9 +101,9 @@ describe Crystalline::Lightweight::Rename do
 
     uri = URI.parse("file:///project/foo.cr")
     # Invalid names
-    Crystalline::Lightweight::Rename.rename(source, uri, 1, 2, "123invalid").should be_nil
-    Crystalline::Lightweight::Rename.rename(source, uri, 1, 2, "").should be_nil
-    Crystalline::Lightweight::Rename.rename(source, uri, 1, 2, "bad-name").should be_nil
+    Crystalino::Lightweight::Rename.rename(source, uri, 1, 2, "123invalid").should be_nil
+    Crystalino::Lightweight::Rename.rename(source, uri, 1, 2, "").should be_nil
+    Crystalino::Lightweight::Rename.rename(source, uri, 1, 2, "bad-name").should be_nil
   end
 
   it "returns nil inside comments and string literals" do
@@ -112,7 +112,7 @@ describe Crystalline::Lightweight::Rename do
     msg = "total string"
     CRYSTAL
 
-    Crystalline::Lightweight::Rename.prepare_rename(source, 0, 26).should be_nil
-    Crystalline::Lightweight::Rename.prepare_rename(source, 1, 8).should be_nil
+    Crystalino::Lightweight::Rename.prepare_rename(source, 0, 26).should be_nil
+    Crystalino::Lightweight::Rename.prepare_rename(source, 1, 8).should be_nil
   end
 end

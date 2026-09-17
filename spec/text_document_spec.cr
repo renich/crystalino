@@ -1,13 +1,13 @@
 require "./support/unwrap"
 require "spec"
 require "lsp/server"
-require "../src/crystalline/text_document"
+require "../src/crystalino/text_document"
 
 private def doc(contents : String)
-  Crystalline::TextDocument.new(URI.parse("file:///tmp/test.cr"), nil, contents)
+  Crystalino::TextDocument.new(URI.parse("file:///tmp/test.cr"), nil, contents)
 end
 
-describe Crystalline::TextDocument do
+describe Crystalino::TextDocument do
   it "computes EOF position for empty contents" do
     document = doc("")
 

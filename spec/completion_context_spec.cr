@@ -1,31 +1,31 @@
 require "./support/unwrap"
 require "spec"
 require "lsp/server"
-require "../src/crystalline/completion_context"
+require "../src/crystalino/completion_context"
 
-describe Crystalline::CompletionContext do
+describe Crystalino::CompletionContext do
   it "returns nil inside comments" do
-    context = Crystalline::CompletionContext.detect("foo # bar.", 10, ".")
+    context = Crystalino::CompletionContext.detect("foo # bar.", 10, ".")
     context.should be_nil
   end
 
   it "returns nil inside quoted strings" do
-    context = Crystalline::CompletionContext.detect("\"foo.bar\"", 7, nil)
+    context = Crystalino::CompletionContext.detect("\"foo.bar\"", 7, nil)
     context.should be_nil
   end
 
   it "returns nil inside regex literals" do
-    context = Crystalline::CompletionContext.detect("/foo./", 5, nil)
+    context = Crystalino::CompletionContext.detect("/foo./", 5, nil)
     context.should be_nil
   end
 
   it "returns nil inside percent string literals" do
-    context = Crystalline::CompletionContext.detect("%(foo.bar)", 8, nil)
+    context = Crystalino::CompletionContext.detect("%(foo.bar)", 8, nil)
     context.should be_nil
   end
 
   it "still completes after a closed string literal" do
-    context = Crystalline::CompletionContext.detect("\"a\".up", 6, nil)
+    context = Crystalino::CompletionContext.detect("\"a\".up", 6, nil)
     context.should_not be_nil
     context = context.unwrap!
 
@@ -36,7 +36,7 @@ describe Crystalline::CompletionContext do
   end
 
   it "still completes after a closed regex literal" do
-    context = Crystalline::CompletionContext.detect("/a/.up", 6, nil)
+    context = Crystalino::CompletionContext.detect("/a/.up", 6, nil)
     context.should_not be_nil
     context = context.unwrap!
 
@@ -47,7 +47,7 @@ describe Crystalline::CompletionContext do
   end
 
   it "still completes after a closed percent string literal" do
-    context = Crystalline::CompletionContext.detect("%(a).up", 7, nil)
+    context = Crystalino::CompletionContext.detect("%(a).up", 7, nil)
     context.should_not be_nil
     context = context.unwrap!
 
@@ -58,7 +58,7 @@ describe Crystalline::CompletionContext do
   end
 
   it "detects dot completion from an identifier fragment" do
-    context = Crystalline::CompletionContext.detect("foo.ba", 6, nil)
+    context = Crystalino::CompletionContext.detect("foo.ba", 6, nil)
     context.should_not be_nil
     context = context.unwrap!
 
@@ -69,7 +69,7 @@ describe Crystalline::CompletionContext do
   end
 
   it "detects namespace completion from a path fragment" do
-    context = Crystalline::CompletionContext.detect("Foo::Ba", 7, nil)
+    context = Crystalino::CompletionContext.detect("Foo::Ba", 7, nil)
     context.should_not be_nil
     context = context.unwrap!
 
@@ -80,7 +80,7 @@ describe Crystalline::CompletionContext do
   end
 
   it "detects ivar completion and includes the sigil in replacement" do
-    context = Crystalline::CompletionContext.detect("@iv", 3, nil)
+    context = Crystalino::CompletionContext.detect("@iv", 3, nil)
     context.should_not be_nil
     context = context.unwrap!
 
@@ -91,7 +91,7 @@ describe Crystalline::CompletionContext do
   end
 
   it "detects a lone @ as ivar completion" do
-    context = Crystalline::CompletionContext.detect("    @", 5, nil)
+    context = Crystalino::CompletionContext.detect("    @", 5, nil)
     context.should_not be_nil
     context = context.unwrap!
 
@@ -102,7 +102,7 @@ describe Crystalline::CompletionContext do
   end
 
   it "does not let a placeholder after the sigil widen the replace range" do
-    context = Crystalline::CompletionContext.detect("    @placeholder", 5, nil)
+    context = Crystalino::CompletionContext.detect("    @placeholder", 5, nil)
     context.should_not be_nil
     context = context.unwrap!
 
@@ -112,7 +112,7 @@ describe Crystalline::CompletionContext do
   end
 
   it "handles explicit dot triggers" do
-    context = Crystalline::CompletionContext.detect("foo.", 4, ".")
+    context = Crystalino::CompletionContext.detect("foo.", 4, ".")
     context.should_not be_nil
     context = context.unwrap!
 
@@ -127,7 +127,7 @@ describe Crystalline::CompletionContext do
     # typing `foo.a` arrives with trigger "a", but the receiver analysis
     # must still end at the dot or the method list is replaced by context
     # items.
-    context = Crystalline::CompletionContext.detect("foo.a", 5, "a")
+    context = Crystalino::CompletionContext.detect("foo.a", 5, "a")
     context.should_not be_nil
     context = context.unwrap!
 
@@ -138,7 +138,7 @@ describe Crystalline::CompletionContext do
   end
 
   it "infers the :: trigger from an identifier-character trigger" do
-    context = Crystalline::CompletionContext.detect("Foo::B", 6, "B")
+    context = Crystalino::CompletionContext.detect("Foo::B", 6, "B")
     context.should_not be_nil
     context = context.unwrap!
 
@@ -149,7 +149,7 @@ describe Crystalline::CompletionContext do
   end
 
   it "infers the sigil trigger from an identifier-character trigger" do
-    context = Crystalline::CompletionContext.detect("@docu", 5, "u")
+    context = Crystalino::CompletionContext.detect("@docu", 5, "u")
     context.should_not be_nil
     context = context.unwrap!
 
@@ -160,7 +160,7 @@ describe Crystalline::CompletionContext do
   end
 
   it "keeps plain-word completions in context mode for identifier triggers" do
-    context = Crystalline::CompletionContext.detect("  greeter", 9, "r")
+    context = Crystalino::CompletionContext.detect("  greeter", 9, "r")
     context.should_not be_nil
     context = context.unwrap!
 

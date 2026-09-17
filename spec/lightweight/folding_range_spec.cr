@@ -1,10 +1,10 @@
 require "../support/unwrap"
 require "spec"
-require "../../src/crystalline/requires"
-require "../../src/crystalline/main"
-require "../../src/crystalline/lightweight/folding_range"
+require "../../src/crystalino/requires"
+require "../../src/crystalino/main"
+require "../../src/crystalino/lightweight/folding_range"
 
-describe Crystalline::Lightweight::FoldingRange do
+describe Crystalino::Lightweight::FoldingRange do
   it "folds classes, modules, and methods" do
     source = <<-CRYSTAL
     module MathUtils
@@ -20,7 +20,7 @@ describe Crystalline::Lightweight::FoldingRange do
     end
     CRYSTAL
 
-    ranges = Crystalline::Lightweight::FoldingRange.folding_ranges(source)
+    ranges = Crystalino::Lightweight::FoldingRange.folding_ranges(source)
     ranges.should_not be_nil
     list = ranges.unwrap!
     list.size.should be >= 4
@@ -48,7 +48,7 @@ describe Crystalline::Lightweight::FoldingRange do
     end
     CRYSTAL
 
-    ranges = Crystalline::Lightweight::FoldingRange.folding_ranges(source)
+    ranges = Crystalino::Lightweight::FoldingRange.folding_ranges(source)
     ranges.should_not be_nil
     list = ranges.unwrap!
 
@@ -70,7 +70,7 @@ describe Crystalline::Lightweight::FoldingRange do
     end
     CRYSTAL
 
-    ranges = Crystalline::Lightweight::FoldingRange.folding_ranges(source)
+    ranges = Crystalino::Lightweight::FoldingRange.folding_ranges(source)
     ranges.should_not be_nil
     list = ranges.unwrap!
 
@@ -90,7 +90,7 @@ describe Crystalline::Lightweight::FoldingRange do
     puts "ready"
     CRYSTAL
 
-    ranges = Crystalline::Lightweight::FoldingRange.folding_ranges(source)
+    ranges = Crystalino::Lightweight::FoldingRange.folding_ranges(source)
     ranges.should_not be_nil
     list = ranges.unwrap!
 
@@ -110,7 +110,7 @@ describe Crystalline::Lightweight::FoldingRange do
     TEXT
     CRYSTAL
 
-    ranges = Crystalline::Lightweight::FoldingRange.folding_ranges(source)
+    ranges = Crystalino::Lightweight::FoldingRange.folding_ranges(source)
     ranges.should_not be_nil
     list = ranges.unwrap!
 
@@ -126,7 +126,7 @@ describe Crystalline::Lightweight::FoldingRange do
     }
     CRYSTAL
 
-    ranges = Crystalline::Lightweight::FoldingRange.folding_ranges(source)
+    ranges = Crystalino::Lightweight::FoldingRange.folding_ranges(source)
     ranges.should_not be_nil
     list = ranges.unwrap!
 
@@ -134,7 +134,7 @@ describe Crystalline::Lightweight::FoldingRange do
   end
 
   it "returns nil on empty source" do
-    Crystalline::Lightweight::FoldingRange.folding_ranges("").should be_nil
+    Crystalino::Lightweight::FoldingRange.folding_ranges("").should be_nil
   end
 
   it "falls back to indentation folding on incomplete source" do
@@ -146,7 +146,7 @@ describe Crystalline::Lightweight::FoldingRange do
     end
     CRYSTAL
 
-    ranges = Crystalline::Lightweight::FoldingRange.folding_ranges(source)
+    ranges = Crystalino::Lightweight::FoldingRange.folding_ranges(source)
     ranges.should_not be_nil
     list = ranges.unwrap!
     list.should_not be_empty

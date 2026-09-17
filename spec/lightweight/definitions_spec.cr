@@ -1,13 +1,13 @@
 require "../support/unwrap"
 require "spec"
-require "../../src/crystalline/requires"
-require "../../src/crystalline/main"
-require "../../src/crystalline/lightweight/definitions"
+require "../../src/crystalino/requires"
+require "../../src/crystalino/main"
+require "../../src/crystalino/lightweight/definitions"
 
 private def build_definition_query(source : String)
-  index = Crystalline::Lightweight::Index.from_source(source)
+  index = Crystalino::Lightweight::Index.from_source(source)
   raise "expected syntax index" unless index
-  Crystalline::Lightweight::Query.new(index)
+  Crystalino::Lightweight::Query.new(index)
 end
 
 private def build_program_definition_query(source : String)
@@ -15,9 +15,9 @@ private def build_program_definition_query(source : String)
   File.write(path, source)
 
   begin
-    Crystalline::EnvironmentConfig.run
+    Crystalino::EnvironmentConfig.run
     server = LSP::Server.new(IO::Memory.new, IO::Memory.new)
-    result = Crystalline::Analysis.compile(
+    result = Crystalino::Analysis.compile(
       server,
       URI.parse("file://#{path}"),
       lib_path: File.join(Dir.current, "lib"),
@@ -25,13 +25,13 @@ private def build_program_definition_query(source : String)
       ignore_diagnostics: true,
     )
     raise "expected top-level semantic result" unless result
-    Crystalline::Lightweight::Query.new(Crystalline::Lightweight::Index.from_program(result.program))
+    Crystalino::Lightweight::Query.new(Crystalino::Lightweight::Index.from_program(result.program))
   ensure
     File.delete(path) if File.exists?(path)
   end
 end
 
-describe Crystalline::Lightweight::Definitions do
+describe Crystalino::Lightweight::Definitions do
   it "finds type definitions in standalone syntax-only files" do
     source = <<-CRYSTAL
       class Clazz
@@ -46,7 +46,7 @@ describe Crystalline::Lightweight::Definitions do
     line_number = lines.index!(&.includes?("puts Clazz"))
     character = lines[line_number].rindex!("Clazz") + 2
 
-    locations = Crystalline::Lightweight::Definitions.definitions(source, file_uri, line_number, character, query)
+    locations = Crystalino::Lightweight::Definitions.definitions(source, file_uri, line_number, character, query)
     locations.should_not be_nil
     locations.unwrap!.first.range.start.line.should eq(0)
   end
@@ -68,7 +68,7 @@ describe Crystalline::Lightweight::Definitions do
     line_number = lines.index!(&.includes?("Clazz.new.method1"))
     character = lines[line_number].rindex!("method1") + 2
 
-    locations = Crystalline::Lightweight::Definitions.definitions(source, file_uri, line_number, character, query)
+    locations = Crystalino::Lightweight::Definitions.definitions(source, file_uri, line_number, character, query)
     locations.should_not be_nil
     locations.unwrap!.first.range.start.line.should eq(1)
   end
@@ -88,7 +88,7 @@ describe Crystalline::Lightweight::Definitions do
     line_number = lines.index! { |line| line.strip == "helper" }
     character = lines[line_number].index!("helper") + 2
 
-    locations = Crystalline::Lightweight::Definitions.definitions(source, file_uri, line_number, character, query)
+    locations = Crystalino::Lightweight::Definitions.definitions(source, file_uri, line_number, character, query)
     locations.should_not be_nil
     locations.unwrap!.first.range.start.line.should eq(0)
   end
@@ -118,24 +118,24 @@ describe Crystalline::Lightweight::Definitions do
 
     dig_line_number = lines.index! { |line| line.strip == "lookup.dig.shout" }
     dig_character = lines[dig_line_number].rindex!("shout") + 2
-    dig_locations = Crystalline::Lightweight::Definitions.definitions(source, file_uri, dig_line_number, dig_character, query)
+    dig_locations = Crystalino::Lightweight::Definitions.definitions(source, file_uri, dig_line_number, dig_character, query)
     dig_locations.should_not be_nil
     dig_locations.unwrap!.first.range.start.line.should eq(1)
 
     find_bang_line_number = lines.index! { |line| line.strip == "items.find!.shout" }
     find_bang_character = lines[find_bang_line_number].rindex!("shout") + 2
-    find_bang_locations = Crystalline::Lightweight::Definitions.definitions(source, file_uri, find_bang_line_number, find_bang_character, query)
+    find_bang_locations = Crystalino::Lightweight::Definitions.definitions(source, file_uri, find_bang_line_number, find_bang_character, query)
     find_bang_locations.should_not be_nil
     find_bang_locations.unwrap!.first.range.start.line.should eq(1)
 
     inherited_line_number = lines.index! { |line| line.strip == "items.compact_map" }
     inherited_character = lines[inherited_line_number].rindex!("compact_map") + 2
-    inherited_locations = Crystalline::Lightweight::Definitions.definitions(source, file_uri, inherited_line_number, inherited_character, query)
+    inherited_locations = Crystalino::Lightweight::Definitions.definitions(source, file_uri, inherited_line_number, inherited_character, query)
     inherited_locations.should_not be_nil
 
     try_line_number = lines.index! { |line| line.strip == "candidate.try &.shout" }
     try_character = lines[try_line_number].rindex!("shout") + 2
-    try_locations = Crystalline::Lightweight::Definitions.definitions(source, file_uri, try_line_number, try_character, query)
+    try_locations = Crystalino::Lightweight::Definitions.definitions(source, file_uri, try_line_number, try_character, query)
     try_locations.should_not be_nil
     try_locations.unwrap!.first.range.start.line.should eq(1)
   end
@@ -158,7 +158,7 @@ describe Crystalline::Lightweight::Definitions do
     line_number = lines.index! { |line| line.strip == "Inner.new" }
     character = lines[line_number].rindex!("Inner") + 2
 
-    locations = Crystalline::Lightweight::Definitions.definitions(source, file_uri, line_number, character, query)
+    locations = Crystalino::Lightweight::Definitions.definitions(source, file_uri, line_number, character, query)
     locations.should_not be_nil
     locations.unwrap!.first.range.start.line.should eq(1)
   end
@@ -184,7 +184,7 @@ describe Crystalline::Lightweight::Definitions do
     line_number = lines.index! { |line| line.strip == "@server" }
     character = lines[line_number].rindex!("@server") + 2
 
-    locations = Crystalline::Lightweight::Definitions.definitions(source, file_uri, line_number, character, query)
+    locations = Crystalino::Lightweight::Definitions.definitions(source, file_uri, line_number, character, query)
     locations.should_not be_nil
     locations.unwrap!.first.range.start.line.should eq(1)
   end
@@ -206,7 +206,7 @@ describe Crystalline::Lightweight::Definitions do
     line_number = lines.index! { |line| line.strip == "workspace" }
     character = lines[line_number].index!("workspace") + 2
 
-    locations = Crystalline::Lightweight::Definitions.definitions(source, file_uri, line_number, character, query)
+    locations = Crystalino::Lightweight::Definitions.definitions(source, file_uri, line_number, character, query)
     locations.should_not be_nil
     locations.unwrap!.first.range.start.line.should eq(1)
   end
@@ -230,7 +230,7 @@ describe Crystalline::Lightweight::Definitions do
     line_number = lines.index! { |line| line.strip == "@service" }
     character = lines[line_number].index!("@service") + 2
 
-    locations = Crystalline::Lightweight::Definitions.definitions(source, file_uri, line_number, character, query)
+    locations = Crystalino::Lightweight::Definitions.definitions(source, file_uri, line_number, character, query)
     locations.should_not be_nil
     locations.unwrap!.first.range.start.line.should eq(2)
   end
@@ -250,7 +250,7 @@ describe Crystalline::Lightweight::Definitions do
     line_number = lines.index!(&.includes?("initialize"))
     character = lines[line_number].index!("@server") + 2
 
-    locations = Crystalline::Lightweight::Definitions.definitions(source, file_uri, line_number, character, query)
+    locations = Crystalino::Lightweight::Definitions.definitions(source, file_uri, line_number, character, query)
     locations.should_not be_nil
     locations.unwrap!.first.range.start.line.should eq(1)
   end

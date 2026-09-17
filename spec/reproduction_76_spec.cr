@@ -1,8 +1,8 @@
 require "./support/unwrap"
 require "spec"
 require "lsp/server"
-require "../src/crystalline/requires"
-require "../src/crystalline/*"
+require "../src/crystalino/requires"
+require "../src/crystalino/*"
 
 class FakeServer < LSP::Server
   def initialize
@@ -11,10 +11,10 @@ class FakeServer < LSP::Server
   end
 end
 
-describe Crystalline::Workspace do
+describe Crystalino::Workspace do
   it "fixes #76: does not trigger completion inside comments" do
     server = FakeServer.new
-    workspace = Crystalline::Workspace.new(server, "file:///tmp")
+    workspace = Crystalino::Workspace.new(server, "file:///tmp")
 
     file_uri = URI.parse("file:///tmp/test_comment.cr")
     # A file with a dot inside a comment

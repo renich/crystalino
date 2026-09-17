@@ -1,24 +1,24 @@
 require "../support/unwrap"
 require "spec"
-require "../../src/crystalline/requires"
-require "../../src/crystalline/main"
-require "../../src/crystalline/lightweight/signature_help"
+require "../../src/crystalino/requires"
+require "../../src/crystalino/main"
+require "../../src/crystalino/lightweight/signature_help"
 
 private def build_syntax_sig_query(defs : String)
-  index = Crystalline::Lightweight::Index.from_source(defs)
+  index = Crystalino::Lightweight::Index.from_source(defs)
   raise "expected syntax index" unless index
-  Crystalline::Lightweight::Query.new(index, secondary: prelude_index)
+  Crystalino::Lightweight::Query.new(index, secondary: prelude_index)
 end
 
-private def prelude_index : Crystalline::Lightweight::Index
-  Crystalline::Lightweight::PreludeIndex.ensure_loaded
-  until index = Crystalline::Lightweight::PreludeIndex.get
+private def prelude_index : Crystalino::Lightweight::Index
+  Crystalino::Lightweight::PreludeIndex.ensure_loaded
+  until index = Crystalino::Lightweight::PreludeIndex.get
     sleep 50.milliseconds
   end
   index
 end
 
-describe Crystalline::Lightweight::SignatureHelp do
+describe Crystalino::Lightweight::SignatureHelp do
   it "provides signature help for top-level methods" do
     defs = <<-CRYSTAL
       # Greets a user.
@@ -30,7 +30,7 @@ describe Crystalline::Lightweight::SignatureHelp do
     query = build_syntax_sig_query(defs)
     buffer = "greet("
 
-    sig_help = Crystalline::Lightweight::SignatureHelp.signature_help(
+    sig_help = Crystalino::Lightweight::SignatureHelp.signature_help(
       buffer,
       0,
       6, # right after '('
@@ -59,7 +59,7 @@ describe Crystalline::Lightweight::SignatureHelp do
     query = build_syntax_sig_query(defs)
     buffer = "calculate(10, "
 
-    sig_help = Crystalline::Lightweight::SignatureHelp.signature_help(
+    sig_help = Crystalino::Lightweight::SignatureHelp.signature_help(
       buffer,
       0,
       buffer.size, # right after ", "
@@ -89,7 +89,7 @@ describe Crystalline::Lightweight::SignatureHelp do
 
     lines = buffer.lines
     target_line = lines.index!(&.strip.starts_with?("acc.deposit("))
-    sig_help = Crystalline::Lightweight::SignatureHelp.signature_help(
+    sig_help = Crystalino::Lightweight::SignatureHelp.signature_help(
       buffer,
       target_line,
       lines[target_line].size,
@@ -115,7 +115,7 @@ describe Crystalline::Lightweight::SignatureHelp do
     query = build_syntax_sig_query(defs)
     buffer = "Server.new("
 
-    sig_help = Crystalline::Lightweight::SignatureHelp.signature_help(
+    sig_help = Crystalino::Lightweight::SignatureHelp.signature_help(
       buffer,
       0,
       buffer.size,
@@ -144,7 +144,7 @@ describe Crystalline::Lightweight::SignatureHelp do
 
     # Test 1: Cursor inside inner call at second argument: `outer(inner(1, |2), `
     inner_comma_col = buffer.index!("inner(1,") + 8
-    inner_help = Crystalline::Lightweight::SignatureHelp.signature_help(
+    inner_help = Crystalino::Lightweight::SignatureHelp.signature_help(
       buffer,
       0,
       inner_comma_col,
@@ -156,7 +156,7 @@ describe Crystalline::Lightweight::SignatureHelp do
 
     # Test 2: Cursor after inner call in outer call: `outer(inner(1, 2), |`
     outer_end_col = buffer.size
-    outer_help = Crystalline::Lightweight::SignatureHelp.signature_help(
+    outer_help = Crystalino::Lightweight::SignatureHelp.signature_help(
       buffer,
       0,
       outer_end_col,
@@ -177,7 +177,7 @@ describe Crystalline::Lightweight::SignatureHelp do
     query = build_syntax_sig_query(defs)
     buffer = "send_message(\"Doe, Jane, Dr.\", "
 
-    sig_help = Crystalline::Lightweight::SignatureHelp.signature_help(
+    sig_help = Crystalino::Lightweight::SignatureHelp.signature_help(
       buffer,
       0,
       buffer.size,
@@ -198,7 +198,7 @@ describe Crystalline::Lightweight::SignatureHelp do
     query = build_syntax_sig_query(defs)
     buffer = "# hello("
 
-    sig_help = Crystalline::Lightweight::SignatureHelp.signature_help(
+    sig_help = Crystalino::Lightweight::SignatureHelp.signature_help(
       buffer,
       0,
       buffer.size,
@@ -216,10 +216,10 @@ describe Crystalline::Lightweight::SignatureHelp do
 
     query = build_syntax_sig_query(defs)
 
-    sig_help_if = Crystalline::Lightweight::SignatureHelp.signature_help("if (true", 0, 8, query)
+    sig_help_if = Crystalino::Lightweight::SignatureHelp.signature_help("if (true", 0, 8, query)
     sig_help_if.should be_nil
 
-    sig_help_def = Crystalline::Lightweight::SignatureHelp.signature_help("def foo(", 0, 8, query)
+    sig_help_def = Crystalino::Lightweight::SignatureHelp.signature_help("def foo(", 0, 8, query)
     sig_help_def.should be_nil
   end
 end

@@ -1,32 +1,32 @@
 require "../support/unwrap"
 require "spec"
-require "../../src/crystalline/requires"
-require "../../src/crystalline/main"
-require "../../src/crystalline/broken_source_fixer"
-require "../../src/crystalline/lightweight/query"
-require "../../src/crystalline/lightweight/definitions"
-require "../../src/crystalline/lightweight/completion"
-require "../../src/crystalline/completion_context"
+require "../../src/crystalino/requires"
+require "../../src/crystalino/main"
+require "../../src/crystalino/broken_source_fixer"
+require "../../src/crystalino/lightweight/query"
+require "../../src/crystalino/lightweight/definitions"
+require "../../src/crystalino/lightweight/completion"
+require "../../src/crystalino/completion_context"
 require "uri"
 
 private def fix_parses(source : String)
-  fixed = Crystalline::BrokenSourceFixer.fix(source)
+  fixed = Crystalino::BrokenSourceFixer.fix(source)
   Crystal::Parser.parse(fixed)
   fixed
 end
 
-private def prelude_index : Crystalline::Lightweight::Index
-  Crystalline::Lightweight::PreludeIndex.ensure_loaded
-  until index = Crystalline::Lightweight::PreludeIndex.get
+private def prelude_index : Crystalino::Lightweight::Index
+  Crystalino::Lightweight::PreludeIndex.ensure_loaded
+  until index = Crystalino::Lightweight::PreludeIndex.get
     sleep 50.milliseconds
   end
   index
 end
 
 private def syntax_query(source : String)
-  index = Crystalline::Lightweight::Index.from_source(source)
+  index = Crystalino::Lightweight::Index.from_source(source)
   raise "expected syntax index" unless index
-  Crystalline::Lightweight::Query.new(index, secondary: prelude_index)
+  Crystalino::Lightweight::Query.new(index, secondary: prelude_index)
 end
 
 describe "lightweight edge cases" do
@@ -86,7 +86,7 @@ describe "lightweight edge cases" do
     line_number = lines.index! { |item| item.strip == ".shout" }
     character = lines[line_number].index!("shout") + 2
 
-    locations = Crystalline::Lightweight::Definitions.definitions(source, uri, line_number, character, query)
+    locations = Crystalino::Lightweight::Definitions.definitions(source, uri, line_number, character, query)
     locations.should_not be_nil
   end
 
@@ -109,21 +109,21 @@ describe "lightweight edge cases" do
     line_number = lines.index!(&.includes?(".shou"))
     line = lines[line_number]
     cursor = line.index!("shou") + 4
-    context = Crystalline::CompletionContext.detect(line, cursor, nil)
+    context = Crystalino::CompletionContext.detect(line, cursor, nil)
     context.should_not be_nil
 
-    items = Crystalline::Lightweight::Completion.complete(source, line_number, context.unwrap!, query)
+    items = Crystalino::Lightweight::Completion.complete(source, line_number, context.unwrap!, query)
     items.should_not be_nil
     items.unwrap!.compact_map(&.insert_text).should contain("shout")
   end
 
   it "definitions resolve a require to a real file" do
-    Crystalline::EnvironmentConfig.run
+    Crystalino::EnvironmentConfig.run
     source = %(require "uri"\n)
     query = syntax_query("class A\nend\n")
     uri = URI.parse("file:///tmp/def_require.cr")
     # Cursor on the string content.
-    locations = Crystalline::Lightweight::Definitions.definitions(source, uri, 0, 10, query)
+    locations = Crystalino::Lightweight::Definitions.definitions(source, uri, 0, 10, query)
     locations.should_not be_nil
     locations.unwrap!.first.uri.should contain("uri.cr")
   end
@@ -147,10 +147,10 @@ describe "lightweight edge cases" do
     lines = source.lines(chomp: false)
     line_number = lines.index!(&.includes?(".fi"))
     line = lines[line_number]
-    context = Crystalline::CompletionContext.detect(line, line.size - 1, nil)
+    context = Crystalino::CompletionContext.detect(line, line.size - 1, nil)
     context.should_not be_nil
 
-    items = Crystalline::Lightweight::Completion.complete(source, line_number, context.unwrap!, query)
+    items = Crystalino::Lightweight::Completion.complete(source, line_number, context.unwrap!, query)
     items.should_not be_nil
     names = items.unwrap!.compact_map(&.insert_text)
     names.should contain("first?")
@@ -168,10 +168,10 @@ describe "lightweight edge cases" do
     lines = source.lines(chomp: false)
     line_number = lines.index!(&.includes?(".to_"))
     line = lines[line_number]
-    context = Crystalline::CompletionContext.detect(line, line.size - 1, nil)
+    context = Crystalino::CompletionContext.detect(line, line.size - 1, nil)
     context.should_not be_nil
 
-    items = Crystalline::Lightweight::Completion.complete(source, line_number, context.unwrap!, query)
+    items = Crystalino::Lightweight::Completion.complete(source, line_number, context.unwrap!, query)
     items.should_not be_nil
     names = items.unwrap!.compact_map(&.insert_text)
     names.should contain("to_s")
@@ -189,10 +189,10 @@ describe "lightweight edge cases" do
     lines = source.lines(chomp: false)
     line_number = lines.index!(&.includes?("walker.ca"))
     line = lines[line_number]
-    context = Crystalline::CompletionContext.detect(line, line.size - 1, nil)
+    context = Crystalino::CompletionContext.detect(line, line.size - 1, nil)
     context.should_not be_nil
 
-    items = Crystalline::Lightweight::Completion.complete(source, line_number, context.unwrap!, query)
+    items = Crystalino::Lightweight::Completion.complete(source, line_number, context.unwrap!, query)
     items.should_not be_nil
     items.unwrap!.compact_map(&.insert_text).should contain("call")
   end
@@ -221,10 +221,10 @@ describe "lightweight edge cases" do
     lines = source.lines(chomp: false)
     line_number = lines.index! { |item| item.strip == "node.na" }
     line = lines[line_number]
-    context = Crystalline::CompletionContext.detect(line, line.size - 1, nil)
+    context = Crystalino::CompletionContext.detect(line, line.size - 1, nil)
     context.should_not be_nil
 
-    items = Crystalline::Lightweight::Completion.complete(source, line_number, context.unwrap!, query)
+    items = Crystalino::Lightweight::Completion.complete(source, line_number, context.unwrap!, query)
     items.should_not be_nil
     items.unwrap!.compact_map(&.insert_text).should contain("name")
   end
@@ -240,10 +240,10 @@ describe "lightweight edge cases" do
     lines = source.lines(chomp: false)
     line_number = lines.index!(&.includes?(".fi"))
     line = lines[line_number]
-    context = Crystalline::CompletionContext.detect(line, line.size - 1, nil)
+    context = Crystalino::CompletionContext.detect(line, line.size - 1, nil)
     context.should_not be_nil
 
-    items = Crystalline::Lightweight::Completion.complete(source, line_number, context.unwrap!, query)
+    items = Crystalino::Lightweight::Completion.complete(source, line_number, context.unwrap!, query)
     items.should_not be_nil
     # A slice returns the array: `first?`/`find` belong to the array, not
     # to its Int32 element.
@@ -269,10 +269,10 @@ describe "lightweight edge cases" do
     line_number = lines.index!(&.includes?(".upca"))
     line = lines[line_number]
     cursor = line.index!(".upca") + 4
-    context = Crystalline::CompletionContext.detect(line, cursor, nil)
+    context = Crystalino::CompletionContext.detect(line, cursor, nil)
     context.should_not be_nil
 
-    items = Crystalline::Lightweight::Completion.complete(source, line_number, context.unwrap!, query)
+    items = Crystalino::Lightweight::Completion.complete(source, line_number, context.unwrap!, query)
     items.should_not be_nil
     items.unwrap!.compact_map(&.insert_text).should contain("upcase")
   end

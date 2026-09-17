@@ -1,7 +1,7 @@
 require "./support/unwrap"
 require "spec"
 require "compiler/crystal/syntax"
-require "../src/crystalline/broken_source_fixer"
+require "../src/crystalino/broken_source_fixer"
 
 # The real-source site tests read project files; specs run from the repo
 # root but resolve relative to this file to stay robust.
@@ -12,25 +12,25 @@ SPEC_SRC_ROOT = File.expand_path("..", __DIR__)
 # program. Duplicated patterns use occurrence order (the sweep hit both
 # `LSP::CompletionItem.new(` sites).
 SITES = [
-  {"src/crystalline/lightweight/completion.cr", "LSP::CompletionItem.new(", 1, "CompletionItem cut"},
-  {"src/crystalline/lightweight/completion.cr", "text_edit: LSP::TextEdit.new(", 1, "nested TextEdit cut"},
-  {"src/crystalline/lightweight/completion.cr", "range: @context.completion_range(@line_number),", 1, "multi-level entering closers"},
-  {"src/crystalline/lightweight/completion.cr", "LSP::CompletionItem.new(", 2, "scoped type item cut"},
-  {"src/crystalline/lightweight/completion.cr", "text_edit: LSP::TextEdit.new(", 2, "nested TextEdit cut 2"},
-  {"src/crystalline/completion_context.cr", "spans << TokenSpan.new(", 1, "TokenSpan cut"},
-  {"src/crystalline/completion_context.cr", "tokens.each do |token|", 1, "do-block header cut"},
-  {"src/crystalline/workspace.cr", "start: LSP::Position.new(line: start_loc.line_number - 1, character: start_loc.column_number - 1),", 1, "three-level call cut"},
-  {"src/crystalline/controller.cr", "range: message.params.range,", 1, "array-in-blocks cut"},
-  {"src/crystalline/lightweight/index.cr", "record_info.methods << MethodInfo.new(", 1, "MethodInfo cut"},
+  {"src/crystalino/lightweight/completion.cr", "LSP::CompletionItem.new(", 1, "CompletionItem cut"},
+  {"src/crystalino/lightweight/completion.cr", "text_edit: LSP::TextEdit.new(", 1, "nested TextEdit cut"},
+  {"src/crystalino/lightweight/completion.cr", "range: @context.completion_range(@line_number),", 1, "multi-level entering closers"},
+  {"src/crystalino/lightweight/completion.cr", "LSP::CompletionItem.new(", 2, "scoped type item cut"},
+  {"src/crystalino/lightweight/completion.cr", "text_edit: LSP::TextEdit.new(", 2, "nested TextEdit cut 2"},
+  {"src/crystalino/completion_context.cr", "spans << TokenSpan.new(", 1, "TokenSpan cut"},
+  {"src/crystalino/completion_context.cr", "tokens.each do |token|", 1, "do-block header cut"},
+  {"src/crystalino/workspace.cr", "start: LSP::Position.new(line: start_loc.line_number - 1, character: start_loc.column_number - 1),", 1, "three-level call cut"},
+  {"src/crystalino/controller.cr", "range: message.params.range,", 1, "array-in-blocks cut"},
+  {"src/crystalino/lightweight/index.cr", "record_info.methods << MethodInfo.new(", 1, "MethodInfo cut"},
 ]
 
 def it_fixes(from, to, file = __FILE__, line = __LINE__)
   it(file: file, line: line) do
-    Crystalline::BrokenSourceFixer.fix(from).should eq(to)
+    Crystalino::BrokenSourceFixer.fix(from).should eq(to)
   end
 end
 
-describe Crystalline::BrokenSourceFixer do
+describe Crystalino::BrokenSourceFixer do
   it_fixes <<-CRYSTAL, <<-CRYSTAL
     # a comment ending with a dot.
     puts 1
@@ -59,7 +59,7 @@ describe Crystalline::BrokenSourceFixer do
       @
     CRYSTAL
 
-    fixed = Crystalline::BrokenSourceFixer.fix(source)
+    fixed = Crystalino::BrokenSourceFixer.fix(source)
     fixed.should eq("  @documents_mutex.synchronize { @opened_documents[uri] = doc }\n  @placeholder")
     Crystal::Parser.parse(fixed)
   end
@@ -637,7 +637,7 @@ describe Crystalline::BrokenSourceFixer do
       end
     CRYSTAL
 
-    fixed = Crystalline::BrokenSourceFixer.fix(source)
+    fixed = Crystalino::BrokenSourceFixer.fix(source)
     Crystal::Parser.parse(fixed)
     fixed.should_not contain("end\n          end")
     fixed.should_not contain("ids << key unless key == 0\n          end")
@@ -666,15 +666,15 @@ describe Crystalline::BrokenSourceFixer do
         raise "bad site: #{rel} line #{(li || raise "Expected li not to be nil") + 1}" unless last_dot && last_dot > 0 && last_dot < line.size - 1
 
         lines[(li || raise "Expected li not to be nil")] = line[0, last_dot + 1]
-        fixed = Crystalline::BrokenSourceFixer.fix(lines.join("\n"))
+        fixed = Crystalino::BrokenSourceFixer.fix(lines.join("\n"))
         Crystal::Parser.parse(fixed)
       end
     end
 
     it "passes valid sources through unchanged" do
-      %w[src/crystalline/workspace.cr src/crystalline/controller.cr src/crystalline/lightweight/inference.cr].each do |rel|
+      %w[src/crystalino/workspace.cr src/crystalino/controller.cr src/crystalino/lightweight/inference.cr].each do |rel|
         source = File.read(File.join(SPEC_SRC_ROOT, rel))
-        Crystalline::BrokenSourceFixer.fix(source).rstrip('\n').should eq(source.rstrip('\n'))
+        Crystalino::BrokenSourceFixer.fix(source).rstrip('\n').should eq(source.rstrip('\n'))
       end
     end
   end
