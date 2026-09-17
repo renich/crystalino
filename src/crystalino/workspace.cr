@@ -781,14 +781,19 @@ class Crystalino::Workspace
   end
 
   def folding_range(server : LSP::Server, file_uri : URI) : Array(LSP::FoldingRange)?
-    source = if text_document = @opened_documents[file_uri.to_s]?
-               fix_source(text_document.contents)
-             elsif File.exists?(file_uri.decoded_path)
-               File.read(file_uri.decoded_path)
-             end
-    return unless source
+    if text_document = @opened_documents[file_uri.to_s]?
+      if cached = text_document.cached_folding_ranges
+        return cached
+      end
 
-    Crystalino::Lightweight::FoldingRange.folding_ranges(source)
+      source = fix_source(text_document.contents)
+      ranges = Crystalino::Lightweight::FoldingRange.folding_ranges(source)
+      text_document.cached_folding_ranges = ranges
+      ranges
+    elsif File.exists?(file_uri.decoded_path)
+      source = File.read(file_uri.decoded_path)
+      Crystalino::Lightweight::FoldingRange.folding_ranges(source)
+    end
   end
 
   def selection_range(server : LSP::Server, file_uri : URI, positions : Array(LSP::Position)) : Array(LSP::SelectionRange)?
@@ -803,14 +808,19 @@ class Crystalino::Workspace
   end
 
   def semantic_tokens(server : LSP::Server, file_uri : URI) : LSP::SemanticTokens?
-    source = if text_document = @opened_documents[file_uri.to_s]?
-               fix_source(text_document.contents)
-             elsif File.exists?(file_uri.decoded_path)
-               File.read(file_uri.decoded_path)
-             end
-    return unless source
+    if text_document = @opened_documents[file_uri.to_s]?
+      if cached = text_document.cached_semantic_tokens
+        return cached
+      end
 
-    Crystalino::Lightweight::SemanticTokens.tokens(source)
+      source = fix_source(text_document.contents)
+      tokens = Crystalino::Lightweight::SemanticTokens.tokens(source)
+      text_document.cached_semantic_tokens = tokens
+      tokens
+    elsif File.exists?(file_uri.decoded_path)
+      source = File.read(file_uri.decoded_path)
+      Crystalino::Lightweight::SemanticTokens.tokens(source)
+    end
   end
 
   def prepare_rename(server : LSP::Server, file_uri : URI, position : LSP::Position) : LSP::PrepareRenameResult?

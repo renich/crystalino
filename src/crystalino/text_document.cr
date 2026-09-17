@@ -20,6 +20,9 @@ class Crystalino::TextDocument
   getter? project : Project?
   getter? dirty = false
 
+  property cached_semantic_tokens : LSP::SemanticTokens? = nil
+  property cached_folding_ranges : Array(LSP::FoldingRange)? = nil
+
   def initialize(@uri, @project, contents : String)
     self.contents = contents
     @dirty = false
@@ -27,6 +30,12 @@ class Crystalino::TextDocument
 
   def contents=(contents : String)
     @inner_contents = contents.lines(chomp: false)
+    invalidate_caches
+  end
+
+  def invalidate_caches
+    @cached_semantic_tokens = nil
+    @cached_folding_ranges = nil
   end
 
   def contents : String
@@ -111,6 +120,7 @@ class Crystalino::TextDocument
     }.lines(chomp: false)
     @inner_contents = (@inner_contents[...range.start.line]? || [] of String) + replacement_lines + (@inner_contents[range.end.line + 1...]? || [] of String)
     @version = version if version
+    invalidate_caches
   end
 
   private def full_update(contents : String, version : Int32? = nil)
