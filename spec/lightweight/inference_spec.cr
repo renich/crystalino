@@ -1,18 +1,18 @@
 require "../support/unwrap"
 require "spec"
-require "../../src/crystalline/requires"
-require "../../src/crystalline/main"
-require "../../src/crystalline/lightweight/query"
-require "../../src/crystalline/lightweight/inference"
+require "../../src/crystalino/requires"
+require "../../src/crystalino/main"
+require "../../src/crystalino/lightweight/query"
+require "../../src/crystalino/lightweight/inference"
 
 private def build_lightweight_index(source : String)
   path = File.join(Dir.tempdir, "crystalline-lightweight-inference-#{Random::Secure.hex(8)}.cr")
   File.write(path, source)
 
   begin
-    Crystalline::EnvironmentConfig.run
+    Crystalino::EnvironmentConfig.run
     server = LSP::Server.new(IO::Memory.new, IO::Memory.new)
-    result = Crystalline::Analysis.compile(
+    result = Crystalino::Analysis.compile(
       server,
       URI.parse("file://#{path}"),
       lib_path: File.join(Dir.current, "lib"),
@@ -20,21 +20,21 @@ private def build_lightweight_index(source : String)
       ignore_diagnostics: true,
     )
     raise "expected top-level semantic result" unless result
-    Crystalline::Lightweight::Index.from_program(result.program)
+    Crystalino::Lightweight::Index.from_program(result.program)
   ensure
     File.delete(path) if File.exists?(path)
   end
 end
 
-private def prelude_index : Crystalline::Lightweight::Index
-  Crystalline::Lightweight::PreludeIndex.ensure_loaded
-  until index = Crystalline::Lightweight::PreludeIndex.get
+private def prelude_index : Crystalino::Lightweight::Index
+  Crystalino::Lightweight::PreludeIndex.ensure_loaded
+  until index = Crystalino::Lightweight::PreludeIndex.get
     sleep 50.milliseconds
   end
   index
 end
 
-describe Crystalline::Lightweight::Inference do
+describe Crystalino::Lightweight::Inference do
   it "infers argument restrictions and simple literal assignments before the cursor" do
     index = build_lightweight_index <<-CRYSTAL
       class Foo
@@ -56,11 +56,11 @@ describe Crystalline::Lightweight::Inference do
       end
     CRYSTAL
 
-    inference = Crystalline::Lightweight::Inference.for(
+    inference = Crystalino::Lightweight::Inference.for(
       source,
       7,
       14,
-      Crystalline::Lightweight::Query.new(index, secondary: prelude_index),
+      Crystalino::Lightweight::Query.new(index, secondary: prelude_index),
     )
 
     inference.should_not be_nil
@@ -106,11 +106,11 @@ describe Crystalline::Lightweight::Inference do
       end
     CRYSTAL
 
-    inference = Crystalline::Lightweight::Inference.for(
+    inference = Crystalino::Lightweight::Inference.for(
       source,
       8,
       12,
-      Crystalline::Lightweight::Query.new(index, secondary: prelude_index),
+      Crystalino::Lightweight::Query.new(index, secondary: prelude_index),
     )
 
     inference.should_not be_nil
@@ -142,11 +142,11 @@ describe Crystalline::Lightweight::Inference do
       end
     CRYSTAL
 
-    inference = Crystalline::Lightweight::Inference.for(
+    inference = Crystalino::Lightweight::Inference.for(
       source,
       11,
       8,
-      Crystalline::Lightweight::Query.new(index, secondary: prelude_index),
+      Crystalino::Lightweight::Query.new(index, secondary: prelude_index),
     )
 
     inference.should_not be_nil
@@ -175,11 +175,11 @@ describe Crystalline::Lightweight::Inference do
       end
     CRYSTAL
 
-    inference = Crystalline::Lightweight::Inference.for(
+    inference = Crystalino::Lightweight::Inference.for(
       source,
       3,
       8,
-      Crystalline::Lightweight::Query.new(index, secondary: prelude_index),
+      Crystalino::Lightweight::Query.new(index, secondary: prelude_index),
     )
 
     inference.should_not be_nil
@@ -206,11 +206,11 @@ describe Crystalline::Lightweight::Inference do
       end
     CRYSTAL
 
-    narrowed_inference = Crystalline::Lightweight::Inference.for(
+    narrowed_inference = Crystalino::Lightweight::Inference.for(
       isa_source,
       4,
       10,
-      Crystalline::Lightweight::Query.new(index, secondary: prelude_index),
+      Crystalino::Lightweight::Query.new(index, secondary: prelude_index),
     )
 
     narrowed_inference.should_not be_nil
@@ -227,11 +227,11 @@ describe Crystalline::Lightweight::Inference do
       end
     CRYSTAL
 
-    truthy_inference = Crystalline::Lightweight::Inference.for(
+    truthy_inference = Crystalino::Lightweight::Inference.for(
       truthy_source,
       4,
       12,
-      Crystalline::Lightweight::Query.new(index, secondary: prelude_index),
+      Crystalino::Lightweight::Query.new(index, secondary: prelude_index),
     )
 
     truthy_inference.should_not be_nil
@@ -265,11 +265,11 @@ describe Crystalline::Lightweight::Inference do
       end
     CRYSTAL
 
-    case_inference = Crystalline::Lightweight::Inference.for(
+    case_inference = Crystalino::Lightweight::Inference.for(
       case_source,
       5,
       1,
-      Crystalline::Lightweight::Query.new(index, secondary: prelude_index),
+      Crystalino::Lightweight::Query.new(index, secondary: prelude_index),
     )
 
     case_inference.should_not be_nil
@@ -288,11 +288,11 @@ describe Crystalline::Lightweight::Inference do
       end
     CRYSTAL
 
-    union_inference = Crystalline::Lightweight::Inference.for(
+    union_inference = Crystalino::Lightweight::Inference.for(
       union_source,
       4,
       11,
-      Crystalline::Lightweight::Query.new(index, secondary: prelude_index),
+      Crystalino::Lightweight::Query.new(index, secondary: prelude_index),
     )
     union_inference.should_not be_nil
     union_inference = union_inference.unwrap!
@@ -308,7 +308,7 @@ describe Crystalline::Lightweight::Inference do
       end
     CRYSTAL
 
-    query = Crystalline::Lightweight::Query.new(index, secondary: prelude_index)
+    query = Crystalino::Lightweight::Query.new(index, secondary: prelude_index)
     names = query.methods_for("Crystal::Def").map(&.name)
     # `location`/`doc` live on Crystal::ASTNode, which the prelude
     # records as a bare-named parent of Crystal::Def.
@@ -332,11 +332,11 @@ describe Crystalline::Lightweight::Inference do
       end
     CRYSTAL
 
-    inference = Crystalline::Lightweight::Inference.for(
+    inference = Crystalino::Lightweight::Inference.for(
       source,
       3,
       12,
-      Crystalline::Lightweight::Query.new(index, secondary: prelude_index),
+      Crystalino::Lightweight::Query.new(index, secondary: prelude_index),
     )
 
     inference.should_not be_nil
@@ -357,11 +357,11 @@ describe Crystalline::Lightweight::Inference do
       end
     CRYSTAL
 
-    inference = Crystalline::Lightweight::Inference.for(
+    inference = Crystalino::Lightweight::Inference.for(
       source,
       3,
       6,
-      Crystalline::Lightweight::Query.new(index, secondary: prelude_index),
+      Crystalino::Lightweight::Query.new(index, secondary: prelude_index),
     )
 
     inference.should_not be_nil
@@ -420,11 +420,11 @@ describe Crystalline::Lightweight::Inference do
 
     key_line_number = lines.index! { |line| line.strip == "key" } + 1
     key_column_number = lines[key_line_number - 1].index!("key") + 2
-    hash_inference = Crystalline::Lightweight::Inference.for(
+    hash_inference = Crystalino::Lightweight::Inference.for(
       source,
       key_line_number,
       key_column_number,
-      Crystalline::Lightweight::Query.new(index, secondary: prelude_index),
+      Crystalino::Lightweight::Query.new(index, secondary: prelude_index),
     )
 
     hash_inference.should_not be_nil
@@ -434,11 +434,11 @@ describe Crystalline::Lightweight::Inference do
 
     memo_line_number = lines.index! { |line| line.strip == "memo" } + 1
     memo_column_number = lines[memo_line_number - 1].index!("memo") + 2
-    reduce_inference = Crystalline::Lightweight::Inference.for(
+    reduce_inference = Crystalino::Lightweight::Inference.for(
       source,
       memo_line_number,
       memo_column_number,
-      Crystalline::Lightweight::Query.new(index, secondary: prelude_index),
+      Crystalino::Lightweight::Query.new(index, secondary: prelude_index),
     )
 
     reduce_inference.should_not be_nil
@@ -448,11 +448,11 @@ describe Crystalline::Lightweight::Inference do
 
     each_with_object_line_number = lines.index!(&.includes?("memo.first?")) + 1
     each_with_object_column_number = lines[each_with_object_line_number - 1].index!("memo") + 2
-    each_with_object_inference = Crystalline::Lightweight::Inference.for(
+    each_with_object_inference = Crystalino::Lightweight::Inference.for(
       source,
       each_with_object_line_number,
       each_with_object_column_number,
-      Crystalline::Lightweight::Query.new(index, secondary: prelude_index),
+      Crystalino::Lightweight::Query.new(index, secondary: prelude_index),
     )
 
     each_with_object_inference.should_not be_nil
@@ -462,11 +462,11 @@ describe Crystalline::Lightweight::Inference do
 
     found_line_number = lines.index! { |line| line.strip == "found" } + 1
     found_column_number = lines[found_line_number - 1].index!("found") + 2
-    return_inference = Crystalline::Lightweight::Inference.for(
+    return_inference = Crystalino::Lightweight::Inference.for(
       source,
       found_line_number,
       found_column_number,
-      Crystalline::Lightweight::Query.new(index, secondary: prelude_index),
+      Crystalino::Lightweight::Query.new(index, secondary: prelude_index),
     )
 
     return_inference.should_not be_nil
@@ -500,11 +500,11 @@ describe Crystalline::Lightweight::Inference do
     lines = source.lines(chomp: false)
     acc_line_number = lines.index! { |line| line.strip == "acc" } + 1
     acc_column_number = lines[acc_line_number - 1].index!("acc") + 2
-    inference = Crystalline::Lightweight::Inference.for(
+    inference = Crystalino::Lightweight::Inference.for(
       source,
       acc_line_number,
       acc_column_number,
-      Crystalline::Lightweight::Query.new(index, secondary: prelude_index),
+      Crystalino::Lightweight::Query.new(index, secondary: prelude_index),
     )
 
     inference.should_not be_nil
@@ -529,11 +529,11 @@ describe Crystalline::Lightweight::Inference do
     lines = source.lines(chomp: false)
     cursor_line_number = lines.index! { |line| line.strip == "foo" } + 1
     cursor_column_number = lines[cursor_line_number - 1].index!("foo") + 2
-    inference = Crystalline::Lightweight::Inference.for(
+    inference = Crystalino::Lightweight::Inference.for(
       source,
       cursor_line_number,
       cursor_column_number,
-      Crystalline::Lightweight::Query.new(index, secondary: prelude_index),
+      Crystalino::Lightweight::Query.new(index, secondary: prelude_index),
     )
 
     inference.should_not be_nil
@@ -572,11 +572,11 @@ describe Crystalline::Lightweight::Inference do
     lines = source.lines(chomp: false)
     cursor_line_number = lines.index! { |line| line.strip == "m" } + 1
     cursor_column_number = lines[cursor_line_number - 1].index!("m") + 2
-    inference = Crystalline::Lightweight::Inference.for(
+    inference = Crystalino::Lightweight::Inference.for(
       source,
       cursor_line_number,
       cursor_column_number,
-      Crystalline::Lightweight::Query.new(index, secondary: prelude_index),
+      Crystalino::Lightweight::Query.new(index, secondary: prelude_index),
     )
 
     inference.should_not be_nil
@@ -601,11 +601,11 @@ describe Crystalline::Lightweight::Inference do
     lines = source.lines(chomp: false)
     cursor_line_number = lines.rindex! { |line| line.strip == "message" } + 1
     cursor_column_number = lines[cursor_line_number - 1].index!("message") + 2
-    inference = Crystalline::Lightweight::Inference.for(
+    inference = Crystalino::Lightweight::Inference.for(
       source,
       cursor_line_number,
       cursor_column_number,
-      Crystalline::Lightweight::Query.new(Crystalline::Lightweight::Index.new),
+      Crystalino::Lightweight::Query.new(Crystalino::Lightweight::Index.new),
     )
 
     inference.should_not be_nil
@@ -637,11 +637,11 @@ describe Crystalline::Lightweight::Inference do
     lines = source.lines(chomp: false)
     cursor_line_number = lines.rindex! { |line| line.strip == "message" } + 1
     cursor_column_number = lines[cursor_line_number - 1].index!("message") + 2
-    inference = Crystalline::Lightweight::Inference.for(
+    inference = Crystalino::Lightweight::Inference.for(
       source,
       cursor_line_number,
       cursor_column_number,
-      Crystalline::Lightweight::Query.new(Crystalline::Lightweight::Index.new),
+      Crystalino::Lightweight::Query.new(Crystalino::Lightweight::Index.new),
     )
 
     inference.should_not be_nil
@@ -661,7 +661,7 @@ describe Crystalline::Lightweight::Inference do
       end
     CRYSTAL
 
-    fixed = Crystalline::BrokenSourceFixer.fix(source)
+    fixed = Crystalino::BrokenSourceFixer.fix(source)
     lines = fixed.lines(chomp: false)
     cursor_line_number = lines.index!(&.includes?("server.")) + 1
     cursor_column_number = lines[cursor_line_number - 1].index!("server") + 2
@@ -672,11 +672,11 @@ describe Crystalline::Lightweight::Inference do
         end
       end
     CRYSTAL
-    inference = Crystalline::Lightweight::Inference.for(
+    inference = Crystalino::Lightweight::Inference.for(
       fixed,
       cursor_line_number,
       cursor_column_number,
-      Crystalline::Lightweight::Query.new(index, secondary: prelude_index),
+      Crystalino::Lightweight::Query.new(index, secondary: prelude_index),
     )
 
     inference.should_not be_nil
@@ -698,7 +698,7 @@ describe Crystalline::Lightweight::Inference do
       end
     CRYSTAL
 
-    fixed = Crystalline::BrokenSourceFixer.fix(source)
+    fixed = Crystalino::BrokenSourceFixer.fix(source)
     lines = fixed.lines(chomp: false)
     cursor_line_number = lines.index!(&.includes?("target.")) + 1
     cursor_column_number = lines[cursor_line_number - 1].index!("target") + 2
@@ -709,11 +709,11 @@ describe Crystalline::Lightweight::Inference do
         end
       end
     CRYSTAL
-    inference = Crystalline::Lightweight::Inference.for(
+    inference = Crystalino::Lightweight::Inference.for(
       fixed,
       cursor_line_number,
       cursor_column_number,
-      Crystalline::Lightweight::Query.new(index, secondary: prelude_index),
+      Crystalino::Lightweight::Query.new(index, secondary: prelude_index),
     )
 
     inference.should_not be_nil
@@ -738,11 +738,11 @@ describe Crystalline::Lightweight::Inference do
     line_number = lines.index!(&.includes?("@values[key]"))
     cursor = lines[line_number].index!("@values") + "@values".size
 
-    inference = Crystalline::Lightweight::Inference.for(
+    inference = Crystalino::Lightweight::Inference.for(
       source,
       line_number + 1,
       cursor + 1,
-      Crystalline::Lightweight::Query.new(index, secondary: prelude_index),
+      Crystalino::Lightweight::Query.new(index, secondary: prelude_index),
     )
 
     inference.should_not be_nil

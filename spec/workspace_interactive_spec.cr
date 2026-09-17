@@ -1,8 +1,8 @@
 require "./support/unwrap"
 require "spec"
 require "file_utils"
-require "../src/crystalline/requires"
-require "../src/crystalline/main"
+require "../src/crystalino/requires"
+require "../src/crystalino/main"
 
 private def with_workspace_document(source : String, &)
   root = File.join(Dir.tempdir, "crystalline-workspace-interactive-#{Random::Secure.hex(8)}")
@@ -18,19 +18,19 @@ private def with_workspace_document(source : String, &)
   File.write(path, source)
 
   begin
-    Crystalline::EnvironmentConfig.run
+    Crystalino::EnvironmentConfig.run
     server = LSP::Server.new(IO::Memory.new, IO::Memory.new)
-    workspace = Crystalline::Workspace.new(server, "file://#{root}")
+    workspace = Crystalino::Workspace.new(server, "file://#{root}")
     uri = URI.parse("file://#{path}")
-    workspace.opened_documents[uri.to_s] = Crystalline::TextDocument.new(uri, workspace.projects.first?, source)
+    workspace.opened_documents[uri.to_s] = Crystalino::TextDocument.new(uri, workspace.projects.first?, source)
     yield server, workspace, uri
   ensure
     FileUtils.rm_rf(root)
   end
 end
 
-class Crystalline::Workspace
-  def send_lightweight_query_for_test(document : Crystalline::TextDocument)
+class Crystalino::Workspace
+  def send_lightweight_query_for_test(document : Crystalino::TextDocument)
     lightweight_query_for(document)
   end
 
@@ -55,17 +55,17 @@ class Crystalline::Workspace
   end
 end
 
-module Crystalline::Analysis
+module Crystalino::Analysis
   def self.stdlib_llvm_error_for_test?(e : Crystal::CodeError)
     stdlib_llvm_error?(e)
   end
 end
 
-private def mark_workspace_document_dirty(document : Crystalline::TextDocument, contents : String, version : Int32 = 1)
+private def mark_workspace_document_dirty(document : Crystalino::TextDocument, contents : String, version : Int32 = 1)
   document.update_contents([{contents, nil}], version: version)
 end
 
-describe Crystalline::Workspace do
+describe Crystalino::Workspace do
   it "does not compile unsupported completion requests without a semantic cache" do
     source = <<-CRYSTAL
       class Greeter
@@ -189,7 +189,7 @@ describe Crystalline::Workspace do
 
     with_workspace_document(source) do |server, workspace, uri|
       project = workspace.projects.first?.unwrap!
-      result = Crystalline::Analysis.compile(
+      result = Crystalino::Analysis.compile(
         server,
         uri,
         lib_path: project.default_lib_path,
@@ -229,7 +229,7 @@ describe Crystalline::Workspace do
     with_workspace_document(source) do |server, workspace, uri|
       project = workspace.projects.first?.unwrap!
       workspace.recalculate_dependencies(server, project)
-      result = Crystalline::Analysis.compile(
+      result = Crystalino::Analysis.compile(
         server,
         uri,
         lib_path: project.default_lib_path,
@@ -238,7 +238,7 @@ describe Crystalline::Workspace do
         compiler_flags: project.flags,
       )
       result.should_not be_nil
-      project.semantic_summary = Crystalline::Lightweight::Summary.from_result(result.unwrap!)
+      project.semantic_summary = Crystalino::Lightweight::Summary.from_result(result.unwrap!)
 
       mark_workspace_document_dirty(workspace.opened_documents[uri.to_s].unwrap!, source)
 
@@ -287,7 +287,7 @@ describe Crystalline::Workspace do
     with_workspace_document(source) do |server, workspace, uri|
       project = workspace.projects.first?.unwrap!
       workspace.recalculate_dependencies(server, project)
-      result = Crystalline::Analysis.compile(
+      result = Crystalino::Analysis.compile(
         server,
         uri,
         lib_path: project.default_lib_path,
@@ -296,7 +296,7 @@ describe Crystalline::Workspace do
         compiler_flags: project.flags,
       )
       result.should_not be_nil
-      project.semantic_summary = Crystalline::Lightweight::Summary.from_result(result.unwrap!)
+      project.semantic_summary = Crystalino::Lightweight::Summary.from_result(result.unwrap!)
 
       mark_workspace_document_dirty(workspace.opened_documents[uri.to_s].unwrap!, dirty_source)
 
@@ -332,7 +332,7 @@ describe Crystalline::Workspace do
     with_workspace_document(source) do |server, workspace, uri|
       project = workspace.projects.first?.unwrap!
       workspace.recalculate_dependencies(server, project)
-      result = Crystalline::Analysis.compile(
+      result = Crystalino::Analysis.compile(
         server,
         uri,
         lib_path: project.default_lib_path,
@@ -341,7 +341,7 @@ describe Crystalline::Workspace do
         compiler_flags: project.flags,
       )
       result.should_not be_nil
-      project.semantic_summary = Crystalline::Lightweight::Summary.from_result(result.unwrap!)
+      project.semantic_summary = Crystalino::Lightweight::Summary.from_result(result.unwrap!)
 
       mark_workspace_document_dirty(workspace.opened_documents[uri.to_s].unwrap!, source)
 
@@ -394,7 +394,7 @@ describe Crystalline::Workspace do
     with_workspace_document(source) do |server, workspace, uri|
       project = workspace.projects.first?.unwrap!
       workspace.recalculate_dependencies(server, project)
-      result = Crystalline::Analysis.compile(
+      result = Crystalino::Analysis.compile(
         server,
         uri,
         lib_path: project.default_lib_path,
@@ -403,7 +403,7 @@ describe Crystalline::Workspace do
         compiler_flags: project.flags,
       )
       result.should_not be_nil
-      project.semantic_summary = Crystalline::Lightweight::Summary.from_result(result.unwrap!)
+      project.semantic_summary = Crystalino::Lightweight::Summary.from_result(result.unwrap!)
 
       mark_workspace_document_dirty(workspace.opened_documents[uri.to_s].unwrap!, source)
 
@@ -436,7 +436,7 @@ describe Crystalline::Workspace do
     with_workspace_document(source) do |server, workspace, uri|
       project = workspace.projects.first?.unwrap!
       workspace.recalculate_dependencies(server, project)
-      result = Crystalline::Analysis.compile(
+      result = Crystalino::Analysis.compile(
         server,
         uri,
         lib_path: project.default_lib_path,
@@ -445,7 +445,7 @@ describe Crystalline::Workspace do
         compiler_flags: project.flags,
       )
       result.should_not be_nil
-      project.semantic_summary = Crystalline::Lightweight::Summary.from_result(result.unwrap!)
+      project.semantic_summary = Crystalino::Lightweight::Summary.from_result(result.unwrap!)
 
       mark_workspace_document_dirty(workspace.opened_documents[uri.to_s].unwrap!, source)
 
@@ -474,7 +474,7 @@ describe Crystalline::Workspace do
     with_workspace_document(source) do |server, workspace, uri|
       project = workspace.projects.first?.unwrap!
       workspace.recalculate_dependencies(server, project)
-      result = Crystalline::Analysis.compile(
+      result = Crystalino::Analysis.compile(
         server,
         uri,
         lib_path: project.default_lib_path,
@@ -483,7 +483,7 @@ describe Crystalline::Workspace do
         compiler_flags: project.flags,
       )
       result.should_not be_nil
-      project.semantic_summary = Crystalline::Lightweight::Summary.from_result(result.unwrap!)
+      project.semantic_summary = Crystalino::Lightweight::Summary.from_result(result.unwrap!)
 
       mark_workspace_document_dirty(workspace.opened_documents[uri.to_s].unwrap!, source)
 
@@ -515,7 +515,7 @@ describe Crystalline::Workspace do
       # require: it must still resolve project types in lightweight queries.
       scratch_path = File.join(File.dirname(uri.decoded_path), "scratch.cr")
       scratch_uri = URI.parse("file://#{scratch_path}")
-      scratch_document = Crystalline::TextDocument.new(scratch_uri, nil, "greeter = Greeter.new\ngreeter.shout\n")
+      scratch_document = Crystalino::TextDocument.new(scratch_uri, nil, "greeter = Greeter.new\ngreeter.shout\n")
       workspace.opened_documents[scratch_uri.to_s] = scratch_document
 
       query = workspace.send_lightweight_query_for_test(scratch_document).should_not be_nil
@@ -555,8 +555,8 @@ describe Crystalline::Workspace do
     # The prelude (stdlib surface) loads asynchronously once in the
     # process: load it deterministically so this spec behaves the same
     # whether it runs first or after the lightweight suite.
-    Crystalline::Lightweight::PreludeIndex.ensure_loaded
-    until Crystalline::Lightweight::PreludeIndex.get
+    Crystalino::Lightweight::PreludeIndex.ensure_loaded
+    until Crystalino::Lightweight::PreludeIndex.get
       sleep 50.milliseconds
     end
 
@@ -572,15 +572,15 @@ describe Crystalline::Workspace do
       lines = fixed_source.lines(chomp: false)
       line_number = lines.index!(&.includes?("items.unknown_method"))
       character = lines[line_number].rindex!("unknown_method") + 2
-      completion_context = Crystalline::CompletionContext.detect(lines[line_number], character, ".").unwrap!
+      completion_context = Crystalino::CompletionContext.detect(lines[line_number], character, ".").unwrap!
       query = workspace.send_lightweight_query_for_test(workspace.opened_documents[uri.to_s].unwrap!).unwrap!
 
-      Crystalline::Lightweight::Hover.diagnose(fixed_source, line_number, character, query).should contain("no lightweight method hover")
-      Crystalline::Lightweight::Definitions.diagnose(fixed_source, uri, line_number, character, query).should contain("no lightweight method definitions")
+      Crystalino::Lightweight::Hover.diagnose(fixed_source, line_number, character, query).should contain("no lightweight method hover")
+      Crystalino::Lightweight::Definitions.diagnose(fixed_source, uri, line_number, character, query).should contain("no lightweight method definitions")
       # With the prelude layered under the project source, `items` (an
       # `Array(String)`) resolves to the full stdlib method list: the
       # completion itself is not a miss, only the unknown method is.
-      Crystalline::Lightweight::Completion.diagnose(fixed_source, line_number, completion_context, query).should contain("resolved")
+      Crystalino::Lightweight::Completion.diagnose(fixed_source, line_number, completion_context, query).should contain("resolved")
     end
   end
 
@@ -619,8 +619,8 @@ describe Crystalline::Workspace do
       Crystal::Location.new("/home/user/project/src/main.cr", 1, 1),
     )
 
-    Crystalline::Analysis.stdlib_llvm_error_for_test?(llvm_error).should be_true
-    Crystalline::Analysis.stdlib_llvm_error_for_test?(user_error).should be_false
+    Crystalino::Analysis.stdlib_llvm_error_for_test?(llvm_error).should be_true
+    Crystalino::Analysis.stdlib_llvm_error_for_test?(user_error).should be_false
   end
 
   it "invalidates the result cache on save even when dependency lookup no longer matches" do
@@ -635,7 +635,7 @@ describe Crystalline::Workspace do
     with_workspace_document(source) do |server, workspace, uri|
       project = workspace.projects.first?.unwrap!
       entry_point = project.entry_point?.unwrap!
-      result = Crystalline::Analysis.compile(
+      result = Crystalino::Analysis.compile(
         server,
         entry_point,
         lib_path: project.default_lib_path,
@@ -675,7 +675,7 @@ describe Crystalline::Workspace do
 
     with_workspace_document(source) do |server, workspace, uri|
       project = workspace.projects.first?.unwrap!
-      result = Crystalline::Analysis.compile(
+      result = Crystalino::Analysis.compile(
         server,
         uri,
         lib_path: project.default_lib_path,
@@ -727,7 +727,7 @@ describe Crystalline::Workspace do
 
     with_workspace_document(source) do |server, workspace, uri|
       project = workspace.projects.first?.unwrap!
-      result = Crystalline::Analysis.compile(
+      result = Crystalino::Analysis.compile(
         server,
         uri,
         lib_path: project.default_lib_path,

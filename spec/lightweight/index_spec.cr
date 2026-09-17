@@ -1,17 +1,17 @@
 require "../support/unwrap"
 require "spec"
-require "../../src/crystalline/requires"
-require "../../src/crystalline/main"
-require "../../src/crystalline/lightweight/query"
+require "../../src/crystalino/requires"
+require "../../src/crystalino/main"
+require "../../src/crystalino/lightweight/query"
 
 private def build_lightweight_index(source : String)
   path = File.join(Dir.tempdir, "crystalline-lightweight-index-#{Random::Secure.hex(8)}.cr")
   File.write(path, source)
 
   begin
-    Crystalline::EnvironmentConfig.run
+    Crystalino::EnvironmentConfig.run
     server = LSP::Server.new(IO::Memory.new, IO::Memory.new)
-    result = Crystalline::Analysis.compile(
+    result = Crystalino::Analysis.compile(
       server,
       URI.parse("file://#{path}"),
       lib_path: File.join(Dir.current, "lib"),
@@ -19,13 +19,13 @@ private def build_lightweight_index(source : String)
       ignore_diagnostics: true,
     )
     raise "expected top-level semantic result" unless result
-    Crystalline::Lightweight::Index.from_program(result.program)
+    Crystalino::Lightweight::Index.from_program(result.program)
   ensure
     File.delete(path) if File.exists?(path)
   end
 end
 
-describe Crystalline::Lightweight::Index do
+describe Crystalino::Lightweight::Index do
   it "provides query helpers over the lightweight index" do
     index = build_lightweight_index <<-CRYSTAL
       module Foo
@@ -45,7 +45,7 @@ describe Crystalline::Lightweight::Index do
       end
     CRYSTAL
 
-    query = Crystalline::Lightweight::Query.new(index)
+    query = Crystalino::Lightweight::Query.new(index)
 
     query.find_type("Foo::Bar").should_not be_nil
     query.subtypes_for("Foo").should contain("Foo::Bar")
@@ -81,13 +81,13 @@ describe Crystalline::Lightweight::Index do
 
     foo = index.types["Foo"]?
     foo.should_not be_nil
-    foo.unwrap!.kind.should eq(Crystalline::Lightweight::TypeKind::Module)
+    foo.unwrap!.kind.should eq(Crystalino::Lightweight::TypeKind::Module)
     foo.unwrap!.subtypes.should contain("Foo::Bar")
 
     bar = index.types["Foo::Bar"]?
     bar.should_not be_nil
     bar = bar.unwrap!
-    bar.kind.should eq(Crystalline::Lightweight::TypeKind::Class)
+    bar.kind.should eq(Crystalino::Lightweight::TypeKind::Class)
 
     baz = bar.methods.find { |method| method.name == "baz" && !method.class_method && !method.macro }
     baz.should_not be_nil
@@ -108,7 +108,7 @@ describe Crystalline::Lightweight::Index do
   end
 
   it "indexes nested types from single-member source bodies" do
-    index = Crystalline::Lightweight::Index.from_source(<<-CRYSTAL).should_not be_nil
+    index = Crystalino::Lightweight::Index.from_source(<<-CRYSTAL).should_not be_nil
       class Foo
         class Inner; end
       end
@@ -130,7 +130,7 @@ describe Crystalline::Lightweight::Index do
   end
 
   it "indexes accessor macros from source bodies" do
-    index = Crystalline::Lightweight::Index.from_source(<<-CRYSTAL).should_not be_nil
+    index = Crystalino::Lightweight::Index.from_source(<<-CRYSTAL).should_not be_nil
       class User
         getter name : String
         property age : Int32
@@ -161,7 +161,7 @@ describe Crystalline::Lightweight::Index do
   end
 
   it "indexes classes defined in macro bodies" do
-    index = Crystalline::Lightweight::Index.from_source(<<-CRYSTAL).should_not be_nil
+    index = Crystalino::Lightweight::Index.from_source(<<-CRYSTAL).should_not be_nil
       module LSP
         macro finished
           class HoverRequest < RequestMessage(Hover?)
@@ -177,7 +177,7 @@ describe Crystalline::Lightweight::Index do
   end
 
   it "types accessor initializers from their of-clause" do
-    index = Crystalline::Lightweight::Index.from_source(<<-CRYSTAL).should_not be_nil
+    index = Crystalino::Lightweight::Index.from_source(<<-CRYSTAL).should_not be_nil
       class Store
         getter entries = {} of String => Int32
         getter items = [] of String
@@ -202,7 +202,7 @@ describe Crystalline::Lightweight::Index do
   end
 
   it "indexes private and protected defs from source bodies" do
-    index = Crystalline::Lightweight::Index.from_source(<<-CRYSTAL).should_not be_nil
+    index = Crystalino::Lightweight::Index.from_source(<<-CRYSTAL).should_not be_nil
       class User
         private def secret : String
           "s"
@@ -226,14 +226,14 @@ describe Crystalline::Lightweight::Index do
   end
 
   it "indexes records as types with field getters from source bodies" do
-    index = Crystalline::Lightweight::Index.from_source(<<-CRYSTAL).should_not be_nil
+    index = Crystalino::Lightweight::Index.from_source(<<-CRYSTAL).should_not be_nil
       module Compiler
         record Result, program : Program, node : ASTNode
       end
     CRYSTAL
 
     result = index.types["Compiler::Result"]?.should_not be_nil
-    result.kind.should eq(Crystalline::Lightweight::TypeKind::Struct)
+    result.kind.should eq(Crystalino::Lightweight::TypeKind::Struct)
 
     node = result.methods.find(&.name.==("node"))
     node.should_not be_nil
@@ -246,7 +246,7 @@ describe Crystalline::Lightweight::Index do
   end
 
   it "indexes aliases inside module and class bodies" do
-    index = Crystalline::Lightweight::Index.from_source(<<-CRYSTAL).should_not be_nil
+    index = Crystalino::Lightweight::Index.from_source(<<-CRYSTAL).should_not be_nil
       module Dispatcher
         alias Handler = Proc(String, URI, String)
 
@@ -257,7 +257,7 @@ describe Crystalline::Lightweight::Index do
     CRYSTAL
 
     handler = index.types["Dispatcher::Handler"]?.should_not be_nil
-    handler.kind.should eq(Crystalline::Lightweight::TypeKind::Alias)
+    handler.kind.should eq(Crystalino::Lightweight::TypeKind::Alias)
     handler.parent_types.should contain("Proc(String, URI, String)")
 
     item = index.types["Dispatcher::Registry::Item"]?.should_not be_nil
@@ -265,7 +265,7 @@ describe Crystalline::Lightweight::Index do
   end
 
   it "merges split definitions into a union of methods, parents and subtypes" do
-    index_a = Crystalline::Lightweight::Index.from_source(<<-CRYSTAL).should_not be_nil
+    index_a = Crystalino::Lightweight::Index.from_source(<<-CRYSTAL).should_not be_nil
       module Crystal
         class ASTNode
           def at : Location?
@@ -279,7 +279,7 @@ describe Crystalline::Lightweight::Index do
       end
     CRYSTAL
 
-    index_b = Crystalline::Lightweight::Index.from_source(<<-CRYSTAL).should_not be_nil
+    index_b = Crystalino::Lightweight::Index.from_source(<<-CRYSTAL).should_not be_nil
       module Crystal
         class ASTNode
           def accept(visitor)
@@ -291,7 +291,7 @@ describe Crystalline::Lightweight::Index do
       end
     CRYSTAL
 
-    merged = Crystalline::Lightweight::Index.merge([index_a, index_b])
+    merged = Crystalino::Lightweight::Index.merge([index_a, index_b])
     ast_node = merged.types["Crystal::ASTNode"]?.should_not be_nil
 
     ast_node.methods.map(&.name).should contain("at")
@@ -300,7 +300,7 @@ describe Crystalline::Lightweight::Index do
   end
 
   it "records superclasses and includes as parents from source bodies" do
-    index = Crystalline::Lightweight::Index.from_source(<<-CRYSTAL).should_not be_nil
+    index = Crystalino::Lightweight::Index.from_source(<<-CRYSTAL).should_not be_nil
       module Mixin
       end
 
@@ -318,7 +318,7 @@ describe Crystalline::Lightweight::Index do
   end
 
   it "records the implicit Reference superclass for superclass-less classes" do
-    index = Crystalline::Lightweight::Index.from_source(<<-CRYSTAL).should_not be_nil
+    index = Crystalino::Lightweight::Index.from_source(<<-CRYSTAL).should_not be_nil
       class Plain
       end
 
@@ -333,7 +333,7 @@ describe Crystalline::Lightweight::Index do
   end
 
   it "synthesizes a class-method new from initialize" do
-    index = Crystalline::Lightweight::Index.from_source(<<-CRYSTAL).should_not be_nil
+    index = Crystalino::Lightweight::Index.from_source(<<-CRYSTAL).should_not be_nil
       class WithArgs
         def initialize(name : String, count : Int32)
         end
@@ -355,7 +355,7 @@ describe Crystalline::Lightweight::Index do
   end
 
   it "records getter-backed ivars with their restrictions" do
-    index = Crystalline::Lightweight::Index.from_source(<<-CRYSTAL).should_not be_nil
+    index = Crystalino::Lightweight::Index.from_source(<<-CRYSTAL).should_not be_nil
       class User
         getter root_uri : URI?
         property age : Int32
@@ -369,7 +369,7 @@ describe Crystalline::Lightweight::Index do
   end
 
   it "infers the return type of untyped defs from the body's last expression" do
-    index = Crystalline::Lightweight::Index.from_source(<<-CRYSTAL).should_not be_nil
+    index = Crystalino::Lightweight::Index.from_source(<<-CRYSTAL).should_not be_nil
       class Store
         @cache : Hash(String, {Crystal::Compiler::Result?, Time::Instant?}) = {} of String => {Crystal::Compiler::Result?, Time::Instant?}
 

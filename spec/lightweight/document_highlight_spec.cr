@@ -1,10 +1,10 @@
 require "../support/unwrap"
 require "spec"
-require "../../src/crystalline/requires"
-require "../../src/crystalline/main"
-require "../../src/crystalline/lightweight/document_highlight"
+require "../../src/crystalino/requires"
+require "../../src/crystalino/main"
+require "../../src/crystalino/lightweight/document_highlight"
 
-describe Crystalline::Lightweight::DocumentHighlight do
+describe Crystalino::Lightweight::DocumentHighlight do
   it "highlights local variable reads and writes scoped to enclosing def" do
     source = <<-CRYSTAL
     def calculate(x, y)
@@ -20,7 +20,7 @@ describe Crystalline::Lightweight::DocumentHighlight do
     CRYSTAL
 
     # Cursor on 'total' in 'total = x + y' (line 1, col 2 in 0-indexed)
-    highlights = Crystalline::Lightweight::DocumentHighlight.highlights(source, 1, 2)
+    highlights = Crystalino::Lightweight::DocumentHighlight.highlights(source, 1, 2)
     highlights.should_not be_nil
     list = highlights.unwrap!
     list.size.should eq(4)
@@ -51,7 +51,7 @@ describe Crystalline::Lightweight::DocumentHighlight do
     CRYSTAL
 
     # Cursor on 'count' in parameter definition (line 0, col 14)
-    highlights = Crystalline::Lightweight::DocumentHighlight.highlights(source, 0, 14)
+    highlights = Crystalino::Lightweight::DocumentHighlight.highlights(source, 0, 14)
     highlights.should_not be_nil
     list = highlights.unwrap!
     list.size.should eq(3)
@@ -85,7 +85,7 @@ describe Crystalline::Lightweight::DocumentHighlight do
     CRYSTAL
 
     # Cursor on '@val' in '@val = 0' (line 1, col 2)
-    highlights = Crystalline::Lightweight::DocumentHighlight.highlights(source, 1, 2)
+    highlights = Crystalino::Lightweight::DocumentHighlight.highlights(source, 1, 2)
     highlights.should_not be_nil
     list = highlights.unwrap!
     list.size.should eq(3)
@@ -119,7 +119,7 @@ describe Crystalline::Lightweight::DocumentHighlight do
     CRYSTAL
 
     # Cursor on '@@active' (line 1, col 2)
-    highlights = Crystalline::Lightweight::DocumentHighlight.highlights(source, 1, 2)
+    highlights = Crystalino::Lightweight::DocumentHighlight.highlights(source, 1, 2)
     highlights.should_not be_nil
     list = highlights.unwrap!
     list.size.should eq(3)
@@ -139,7 +139,7 @@ describe Crystalline::Lightweight::DocumentHighlight do
     CRYSTAL
 
     # Cursor on 'greet' call (line 4, col 2)
-    highlights = Crystalline::Lightweight::DocumentHighlight.highlights(source, 4, 2)
+    highlights = Crystalino::Lightweight::DocumentHighlight.highlights(source, 4, 2)
     highlights.should_not be_nil
     list = highlights.unwrap!
     list.size.should eq(3)
@@ -166,7 +166,7 @@ describe Crystalline::Lightweight::DocumentHighlight do
     CRYSTAL
 
     # Cursor on 'Worker' in 'Worker.new' (line 5, col 4)
-    highlights = Crystalline::Lightweight::DocumentHighlight.highlights(source, 5, 4)
+    highlights = Crystalino::Lightweight::DocumentHighlight.highlights(source, 5, 4)
     highlights.should_not be_nil
     list = highlights.unwrap!
     list.size.should eq(2)
@@ -186,9 +186,9 @@ describe Crystalline::Lightweight::DocumentHighlight do
     CRYSTAL
 
     # Space between 'def' and 'foo'
-    Crystalline::Lightweight::DocumentHighlight.highlights(source, 0, 4).should be_nil
+    Crystalino::Lightweight::DocumentHighlight.highlights(source, 0, 4).should be_nil
     # Out-of-bounds line
-    Crystalline::Lightweight::DocumentHighlight.highlights(source, 4, 0).should be_nil
+    Crystalino::Lightweight::DocumentHighlight.highlights(source, 4, 0).should be_nil
   end
 
   it "falls back to textual highlighting when syntax has typing errors" do
@@ -199,7 +199,7 @@ describe Crystalline::Lightweight::DocumentHighlight do
     CRYSTAL
 
     # Cursor on 'foo' at line 0, col 1
-    highlights = Crystalline::Lightweight::DocumentHighlight.highlights(source, 0, 1)
+    highlights = Crystalino::Lightweight::DocumentHighlight.highlights(source, 0, 1)
     highlights.should_not be_nil
     list = highlights.unwrap!
     list.size.should be >= 2

@@ -1,20 +1,20 @@
 require "../support/unwrap"
 require "spec"
-require "../../src/crystalline/requires"
-require "../../src/crystalline/main"
-require "../../src/crystalline/completion_context"
-require "../../src/crystalline/lightweight/completion"
-require "../../src/crystalline/lightweight/summary"
+require "../../src/crystalino/requires"
+require "../../src/crystalino/main"
+require "../../src/crystalino/completion_context"
+require "../../src/crystalino/lightweight/completion"
+require "../../src/crystalino/lightweight/summary"
 
 private def build_query_with_summary(source : String)
   path = File.join(Dir.tempdir, "crystalline-lightweight-summary-#{Random::Secure.hex(8)}.cr")
   File.write(path, source)
 
   begin
-    Crystalline::EnvironmentConfig.run
+    Crystalino::EnvironmentConfig.run
     server = LSP::Server.new(IO::Memory.new, IO::Memory.new)
 
-    top_level_result = Crystalline::Analysis.compile(
+    top_level_result = Crystalino::Analysis.compile(
       server,
       URI.parse("file://#{path}"),
       lib_path: File.join(Dir.current, "lib"),
@@ -23,7 +23,7 @@ private def build_query_with_summary(source : String)
     )
     raise "expected top-level semantic result" unless top_level_result
 
-    semantic_result = Crystalline::Analysis.compile(
+    semantic_result = Crystalino::Analysis.compile(
       server,
       URI.parse("file://#{path}"),
       lib_path: File.join(Dir.current, "lib"),
@@ -32,15 +32,15 @@ private def build_query_with_summary(source : String)
     )
     raise "expected semantic result" unless semantic_result
 
-    index = Crystalline::Lightweight::Index.from_program(top_level_result.program)
-    summary = Crystalline::Lightweight::Summary.from_result(semantic_result)
-    Crystalline::Lightweight::Query.new(index, summary)
+    index = Crystalino::Lightweight::Index.from_program(top_level_result.program)
+    summary = Crystalino::Lightweight::Summary.from_result(semantic_result)
+    Crystalino::Lightweight::Query.new(index, summary)
   ensure
     File.delete(path) if File.exists?(path)
   end
 end
 
-describe Crystalline::Lightweight::Summary do
+describe Crystalino::Lightweight::Summary do
   it "derives method contracts from available method summaries" do
     query = build_query_with_summary <<-CRYSTAL
       class Greeter
@@ -67,14 +67,14 @@ describe Crystalline::Lightweight::Summary do
     CRYSTAL
 
     tap_contracts = query.method_contracts_for("Wrapper", "tap")
-    tap_contracts.map(&.kind).should contain(Crystalline::Lightweight::MethodContractKind::YieldSelf)
-    tap_contracts.map(&.kind).should contain(Crystalline::Lightweight::MethodContractKind::PreserveReceiver)
+    tap_contracts.map(&.kind).should contain(Crystalino::Lightweight::MethodContractKind::YieldSelf)
+    tap_contracts.map(&.kind).should contain(Crystalino::Lightweight::MethodContractKind::PreserveReceiver)
 
     current_contracts = query.method_contracts_for("Wrapper", "current")
-    current_contracts.map(&.kind).should contain(Crystalline::Lightweight::MethodContractKind::ReturnValue)
+    current_contracts.map(&.kind).should contain(Crystalino::Lightweight::MethodContractKind::ReturnValue)
 
     current_nilable_contracts = query.method_contracts_for("Wrapper", "current?")
-    current_nilable_contracts.map(&.kind).should contain(Crystalline::Lightweight::MethodContractKind::ReturnValueOrNil)
+    current_nilable_contracts.map(&.kind).should contain(Crystalino::Lightweight::MethodContractKind::ReturnValueOrNil)
   end
 
   it "captures inferred return types for typed defs" do
@@ -134,10 +134,10 @@ describe Crystalline::Lightweight::Summary do
 
     lines = completion_source.lines(chomp: false)
     line_number = lines.index!(&.includes?("wrapper.build.sh"))
-    context = Crystalline::CompletionContext.detect(lines[line_number], lines[line_number].size - 1, nil)
+    context = Crystalino::CompletionContext.detect(lines[line_number], lines[line_number].size - 1, nil)
     context.should_not be_nil
 
-    items = Crystalline::Lightweight::Completion.complete(completion_source, line_number, context.unwrap!, query)
+    items = Crystalino::Lightweight::Completion.complete(completion_source, line_number, context.unwrap!, query)
     items.should_not be_nil
     items.unwrap!.compact_map(&.insert_text).should contain("shout")
   end
@@ -187,10 +187,10 @@ describe Crystalline::Lightweight::Summary do
     lines = completion_source.lines(chomp: false)
     line_number = lines.index!(&.includes?("node.sh"))
     cursor = lines[line_number].index!("node.sh") + "node.sh".size
-    context = Crystalline::CompletionContext.detect(lines[line_number], cursor, nil)
+    context = Crystalino::CompletionContext.detect(lines[line_number], cursor, nil)
     context.should_not be_nil
 
-    items = Crystalline::Lightweight::Completion.complete(completion_source, line_number, context.unwrap!, query)
+    items = Crystalino::Lightweight::Completion.complete(completion_source, line_number, context.unwrap!, query)
     items.should_not be_nil
     items.unwrap!.compact_map(&.insert_text).should contain("shout")
   end

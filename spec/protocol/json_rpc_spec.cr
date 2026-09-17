@@ -1,7 +1,7 @@
 require "../support/unwrap"
 require "spec"
-require "../../src/crystalline/requires"
-require "../../src/crystalline/main"
+require "../../src/crystalino/requires"
+require "../../src/crystalino/main"
 
 class LSP::Server
   def self.read_for_test(io : IO)

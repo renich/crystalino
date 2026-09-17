@@ -1,8 +1,8 @@
 require "./support/unwrap"
 require "spec"
 require "lsp/server"
-require "../src/crystalline/requires"
-require "../src/crystalline/*"
+require "../src/crystalino/requires"
+require "../src/crystalino/*"
 
 class FakeServer < LSP::Server
   def initialize
@@ -11,10 +11,10 @@ class FakeServer < LSP::Server
   end
 end
 
-describe Crystalline::Workspace do
+describe Crystalino::Workspace do
   it "fixes #63: range formatting does not add extra newlines" do
     server = FakeServer.new
-    workspace = Crystalline::Workspace.new(server, "file:///tmp")
+    workspace = Crystalino::Workspace.new(server, "file:///tmp")
 
     file_uri = URI.parse("file:///tmp/test_paste.cr")
     initial_content = "foo \"bar\"\n"

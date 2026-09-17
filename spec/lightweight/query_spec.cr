@@ -1,11 +1,11 @@
 require "../support/unwrap"
 require "spec"
-require "../../src/crystalline/requires"
-require "../../src/crystalline/main"
-require "../../src/crystalline/lightweight/query"
+require "../../src/crystalino/requires"
+require "../../src/crystalino/main"
+require "../../src/crystalino/lightweight/query"
 
-private def index_from_source(source : String) : Crystalline::Lightweight::Index
-  Crystalline::Lightweight::Index.from_source(source).should_not be_nil
+private def index_from_source(source : String) : Crystalino::Lightweight::Index
+  Crystalino::Lightweight::Index.from_source(source).should_not be_nil
 end
 
 private def build_lightweight_index(source : String)
@@ -13,9 +13,9 @@ private def build_lightweight_index(source : String)
   File.write(path, source)
 
   begin
-    Crystalline::EnvironmentConfig.run
+    Crystalino::EnvironmentConfig.run
     server = LSP::Server.new(IO::Memory.new, IO::Memory.new)
-    result = Crystalline::Analysis.compile(
+    result = Crystalino::Analysis.compile(
       server,
       URI.parse("file://#{path}"),
       lib_path: File.join(Dir.current, "lib"),
@@ -23,13 +23,13 @@ private def build_lightweight_index(source : String)
       ignore_diagnostics: true,
     )
     raise "expected top-level semantic result" unless result
-    Crystalline::Lightweight::Index.from_program(result.program)
+    Crystalino::Lightweight::Index.from_program(result.program)
   ensure
     File.delete(path) if File.exists?(path)
   end
 end
 
-describe Crystalline::Lightweight::Query do
+describe Crystalino::Lightweight::Query do
   it "overlays a dirty-buffer index on top of the base index" do
     base = index_from_source(<<-CRYSTAL)
       class Greeter
@@ -75,7 +75,7 @@ describe Crystalline::Lightweight::Query do
       end
     CRYSTAL
 
-    query = Crystalline::Lightweight::Query.new(base, overlay: overlay)
+    query = Crystalino::Lightweight::Query.new(base, overlay: overlay)
 
     # A same-signature redefinition at a different location wins.
     hello = query.methods_for("Greeter").find(&.name.==("hello")).should_not be_nil
@@ -108,7 +108,7 @@ describe Crystalline::Lightweight::Query do
     base = index_from_source(source)
     overlay = index_from_source(source.gsub(": Int32", ": String"))
 
-    query = Crystalline::Lightweight::Query.new(base, overlay: overlay)
+    query = Crystalino::Lightweight::Query.new(base, overlay: overlay)
     hello = query.methods_for("Greeter").find(&.name.==("hello")).should_not be_nil
     hello.unwrap!.return_type.should eq("Int32")
   end
@@ -117,7 +117,7 @@ describe Crystalline::Lightweight::Query do
     base = index_from_source("class Base\nend\n")
     secondary = index_from_source("class Side\n  def side_method : Int32\n    1\n  end\nend\n")
 
-    query = Crystalline::Lightweight::Query.new(base, secondary: secondary)
+    query = Crystalino::Lightweight::Query.new(base, secondary: secondary)
     query.find_type("Side").should_not be_nil
     query.methods_for("Side").map(&.name).should contain("side_method")
     query.resolve_type_name("Side").should eq("Side")
@@ -149,7 +149,7 @@ describe Crystalline::Lightweight::Query do
       end
     CRYSTAL
 
-    query = Crystalline::Lightweight::Query.new(base, overlay: overlay)
+    query = Crystalino::Lightweight::Query.new(base, overlay: overlay)
     names = query.methods_for("Child").map(&.name)
     names.should contain("base_method")
     names.should contain("overlay_method")

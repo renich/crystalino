@@ -1,26 +1,22 @@
-name: crystalline
-version: 0.19.2
+name: crystalino
+version: 0.20.0
 
 authors:
   - Julien Elbaz <elbywan@hotmail.com>
+  - Rénich Bon Ćirić <renich@woralelandia.com>
 
 targets:
-  crystalline:
-    main: src/crystalline_main.cr
-  sentry:
-    main: lib/sentry/src/sentry_cli.cr
+  crystalino:
+    main: src/crystalino_main.cr
 
 dependencies:
   lsp:
     github: elbywan/crystal-lsp
-  priority-queue:
-    github: spider-gazelle/priority-queue
 
 development_dependencies:
-  sentry:
-    github: samueleaton/sentry
-    version: ~> 0.5.0
+  ameba:
+    github: crystal-ameba/ameba
 
-crystal: ">= 1.20.0, < 2.0.0"
+crystal: ">= 1.21.0, < 2.0.0"
 
 license: MIT

@@ -1,12 +1,12 @@
 require "./support/unwrap"
 require "spec"
-require "../src/crystalline/text_document"
+require "../src/crystalino/text_document"
 require "lsp/base/range"
 
-describe Crystalline::TextDocument do
+describe Crystalino::TextDocument do
   it "fixes #41: does not strip newlines during incremental updates" do
     initial_content = "def foo\nend\n"
-    doc = Crystalline::TextDocument.new(URI.parse("file:///test.cr"), nil, initial_content)
+    doc = Crystalino::TextDocument.new(URI.parse("file:///test.cr"), nil, initial_content)
     doc.contents.should eq(initial_content)
 
     # Simulation: Append a comment at the end of the line (at the newline position)
