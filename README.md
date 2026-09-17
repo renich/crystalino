@@ -28,7 +28,7 @@ Benchmarked against a 1,100-line real-world Crystal source file ([`src/crystalin
 | **Definition Mean Latency** | `58.21 ms` | **`6.18 ms`** | **9.4x faster** |
 | **Definition p95 Latency** | `32.18 ms` | **`7.61 ms`** | **4.2x faster** |
 | **`didOpen` (1,060 LOC)** | `1.32 ms` | **`1.10 ms`** | **17% faster** |
-| **Peak Memory Footprint (HWM)** | `434,148 KB` | **`320,072 KB`** | **114 MB / 26% lower** |
+| **Peak Memory Footprint (HWM)** | `434,148 KB` | **`320,072 KB`** | **114 MB/26% lower** |
 | **Binary Executable Size** | `46 MB` | **`15 MB`** | **68% smaller** |
 | **Shutdown Lifecycle** | `Signal(TERM)` (Hung) | **`Exit 0`** | **Deterministic exit** |
 
@@ -92,7 +92,7 @@ sudo cp ./bin/crystalino /usr/local/bin/crystalino
 
 ---
 
-## Editor Configuration
+## Editor & Agent Configuration
 
 ### Neovim (`nvim-lspconfig` or native)
 
@@ -104,6 +104,21 @@ lspconfig.crystalline.setup({
   filetypes = { "crystal" },
   root_dir = lspconfig.util.root_pattern("shard.yml", ".git"),
 })
+```
+
+### Crush/Antigravity Agent Terminal (`crush.json`)
+
+In `~/.config/crush/crush.json`:
+
+```json
+{
+  "lsp": {
+    "crystal": {
+      "command": "crystalino",
+      "args": ["--stdio"]
+    }
+  }
+}
 ```
 
 ### VSCode
@@ -166,6 +181,33 @@ In `~/.config/zed/settings.json`:
 
 ---
 
+## AI Agents & Antigravity (AGY) Integration
+
+### The Crystal Tooling Duo: Crystalino LSP + Crystal MCP Server
+
+For autonomous AI coding agents (such as Google Antigravity, Claude Code, OpenCode, and Cursor), Crystalino pairs seamlessly with the **[Crystal MCP Server](https://gitlab.com/renich/crystal-mcp)** (`renich/crystal-mcp`):
+
+- **[Crystalino](https://github.com/renich/crystalino)** provides **LSP Intelligence**: real-time document parsing, diagnostics, hover tooltips, go-to-definition, parameter signature hints, semantic highlighting, and lexical renaming.
+- **[Crystal MCP Server](https://gitlab.com/renich/crystal-mcp)** provides **Agentic Tool Execution**: zero-codegen build checks (`check_build`), targeted spec runs with line-level filtering (`run_spec`), code formatting (`format_code`), static code analysis via Ameba (`lint_code`), macro expansions (`expand_macro`), and structured type hierarchy JSON (`get_hierarchy`).
+
+#### Configuring `crystal-mcp` for Antigravity (AGY)
+
+In your global or workspace Antigravity MCP configuration (`~/.gemini/config/mcp_config.json`):
+
+```json
+{
+  "mcpServers": {
+    "crystal-mcp": {
+      "command": "/home/YOUR_USER/.local/bin/crystal-mcp",
+      "args": [],
+      "env": {}
+    }
+  }
+}
+```
+
+---
+
 ## Workspace Configuration (`shard.yml`)
 
 Crystalino automatically discovers project entry points (`targets`, `src/main.cr`, `src/requires.cr`). You can customize behavior in your project's `shard.yml`:
@@ -175,7 +217,7 @@ Crystalino automatically discovers project entry points (`targets`, `src/main.cr
 crystalino:
   main: spec/spec_helper.cr
 
-# Support monorepos / multi-project workspaces
+# Support monorepos/multi-project workspaces
 crystalino:
   projects:
     - services/auth
