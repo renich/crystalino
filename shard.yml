@@ -6,7 +6,7 @@ authors:
 
 targets:
   crystalline:
-    main: src/crystalline.cr
+    main: src/crystalline_main.cr
   sentry:
     main: lib/sentry/src/sentry_cli.cr
 
