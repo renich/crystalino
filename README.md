@@ -17,7 +17,7 @@
 
 ## Empirical Performance
 
-Benchmarked against a 1,060-line real-world Crystal source file ([`src/crystalline/workspace.cr`](src/crystalline/workspace.cr)) on Crystal 1.21:
+Benchmarked against a 1,100-line real-world Crystal source file ([`src/crystalino/workspace.cr`](src/crystalino/workspace.cr)) on Crystal 1.21:
 
 | Metric | Upstream (`v0.19.0`) | Crystalino (`v0.19.2` Release Native) | Improvement |
 | :--- | :--- | :--- | :--- |
@@ -84,10 +84,10 @@ cd crystalino
 shards install
 
 # Compile high-performance optimized release binary
-shards build crystalline --release --no-debug --mcpu=native
+shards build crystalino --release --no-debug --mcpu=native
 
 # Install to PATH
-sudo cp ./bin/crystalline /usr/local/bin/crystalino
+sudo cp ./bin/crystalino /usr/local/bin/crystalino
 ```
 
 ---
@@ -172,11 +172,11 @@ Crystalino automatically discovers project entry points (`targets`, `src/main.cr
 
 ```yaml
 # Override entry point for libraries/specs
-crystalline:
+crystalino:
   main: spec/spec_helper.cr
 
 # Support monorepos / multi-project workspaces
-crystalline:
+crystalino:
   projects:
     - services/auth
     - services/api
@@ -187,8 +187,8 @@ crystalline:
 ## Development & Testing
 
 ```bash
-# Run unit & protocol test suites (302 examples)
-crystal spec spec/lightweight/ spec/protocol/ spec/*.cr
+# Run unit & protocol test suites (332 examples)
+crystal spec
 
 # Run static code analysis (0 violations required)
 ./bin/ameba

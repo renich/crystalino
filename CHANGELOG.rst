@@ -15,7 +15,7 @@ Added
 * In-Flight Compile Cancellation: Thread-safe ``CancellationToken`` and ``CancellableProgressTracker`` stage interceptor to abort stale background semantic compilation passes immediately upon new document edits, saves, or client cancellations.
 * Token & Folding Cache: Versioned document-level caching for Semantic Tokens (0.44ms mean latency) and Folding Ranges (0.15ms mean latency) with automatic cache invalidation on document buffer mutations.
 * Domain Modules: Extracted ``Crystalino::DefFormatter``, ``Crystalino::Analysis::AstResolver``, and ``Crystalino::Lightweight::CompletionKind`` into domain-bounded packages.
-* Unit Specifications: Unit tests for cancellation tokens, stage interception, and exception propagation (308/308 passing specs).
+* Crucible Hardening: Thread-safe Mutex protection for ``ResultCache``, ``@semantic_cache``, and ``@opened_documents``; atomic progress request IDs; multi-fiber cancellation concurrency tests; and dedicated unit specs for ``ResultCache``, ``DefFormatter``, and ``CompletionKind`` (332/332 passing specs).
 
 Changed
 -------
@@ -23,6 +23,14 @@ Changed
 * Zero Legacy Baggage: Purged all legacy compatibility layers, fallback keys, and deprecated module aliases.
 * Modern Concurrency Runtime: Standardized exclusively on native Crystal 1.21+ ``Fiber::ExecutionContext::Parallel`` and purged legacy ``preview_mt``/single-threaded code branches.
 * Release Optimization: Native release compilation (``--release --no-debug --mcpu=native``) reducing binary footprint to 15MB (68% reduction) with sub-10ms mean interactive latencies.
+
+Fixed
+-----
+* Result Cache Inversion: Corrected upstream logic inversion in ``ResultCache#invalidated?`` where un-invalidated results were rejected, and added query cache eviction on document save.
+* Document Synchronization: Resolved pending changes drain deadlock and FIFO ordering in ``TextDocument`` using standard library ``bsearch_index``, and clamped partial update column slices with safe bounds.
+* Compilation Timeout Cleanup: Enforced explicit token cancellation on 120s timeout and guaranteed active compilation cleanup across all return paths via ``begin/ensure``.
+* AST Completion Kinds: Mapped ``Crystal::PrimitiveType`` to Struct and ``Crystal::AliasType``/``TypeDefType`` to Interface in ``Lightweight::CompletionKind``.
+* Method Signature Formatting: Resolved missing space in parameterless method signatures and formatted typed block arguments in ``DefFormatter``.
 
 Removed
 -------
