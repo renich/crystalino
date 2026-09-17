@@ -94,7 +94,94 @@ sudo cp ./bin/crystalino /usr/local/bin/crystalino
 
 ## Editor & Agent Configuration
 
-### Neovim (`nvim-lspconfig` or native)
+### Vim 9 (`yegappan/lsp`)
+
+Using Vim 9's native Vim9script LSP client ([`yegappan/lsp`](https://github.com/yegappan/lsp)):
+
+1. Install the plugin into your Vim package path:
+
+```bash
+git clone https://github.com/yegappan/lsp.git ~/.vim/pack/local/start/lsp
+vim -u NONE -c "helptags ~/.vim/pack/local/start/lsp/doc" -c "q"
+```
+
+2. Add the following to your `~/.vimrc`:
+
+```vim
+" Disable legacy vim-crystal compiler runners to prevent blocking
+let g:crystal_define_mappings = 0
+let g:crystal_enable_completion = 0
+let g:ale_linters = {'crystal': []}
+
+if executable('crystalino')
+    " Configure LSP display options
+    let g:lsp_options = #{
+        \ autoHighlightDiags: v:true,
+        \ showDiagInPopup: v:true,
+        \ diagVirtualText: v:true,
+        \ autoComplete: v:true,
+        \ }
+
+    " Register Crystalino language server
+    let g:lsp_servers = [#{
+        \ name: 'crystalino',
+        \ filetype: ['crystal'],
+        \ path: 'crystalino',
+        \ args: ['--stdio'],
+        \ rootSearch: ['shard.yml', '.git/'],
+        \ syncInit: v:true,
+        \ }]
+
+    " Buffer mappings for Crystal files
+    augroup CrystalinoMappings
+        autocmd!
+        autocmd FileType crystal nnoremap <buffer> <silent> gd <cmd>LspGotoDefinition<cr>
+        autocmd FileType crystal nnoremap <buffer> <silent> K  <cmd>LspHover<cr>
+        autocmd FileType crystal nnoremap <buffer> <silent> [d <cmd>LspDiag prev<cr>
+        autocmd FileType crystal nnoremap <buffer> <silent> ]d <cmd>LspDiag next<cr>
+        autocmd FileType crystal nnoremap <buffer> <silent> <leader>rn <cmd>LspRename<cr>
+        autocmd FileType crystal nnoremap <buffer> <silent> <leader>f  <cmd>LspFormat<cr>
+    augroup END
+endif
+```
+
+### Neovim
+
+#### Native LSP (Neovim 0.11/0.12+)
+
+In `~/.config/nvim/init.lua`:
+
+```lua
+-- Register Crystalino language server
+if vim.fn.executable("crystalino") == 1 then
+    vim.lsp.config["crystalino"] = {
+        cmd = { "crystalino", "--stdio" },
+        filetypes = { "crystal" },
+        root_markers = { "shard.yml", ".git" },
+    }
+    vim.lsp.enable("crystalino")
+end
+
+-- Keybindings and buffer configuration
+vim.api.nvim_create_autocmd("LspAttach", {
+    desc = "LSP keybindings and buffer options",
+    callback = function(args)
+        local bufnr = args.buf
+        local map = function(mode, lhs, rhs, desc)
+            vim.keymap.set(mode, lhs, rhs, { buffer = bufnr, silent = true, desc = desc })
+        end
+
+        map("n", "gd", vim.lsp.buf.definition, "LSP: Go to Definition")
+        map("n", "K", vim.lsp.buf.hover, "LSP: Hover Documentation")
+        map("n", "<leader>rn", vim.lsp.buf.rename, "LSP: Rename Symbol")
+        map("n", "<leader>f", function() vim.lsp.buf.format({ async = true }) end, "LSP: Format Buffer")
+        map("n", "[d", vim.diagnostic.goto_prev, "LSP: Previous Diagnostic")
+        map("n", "]d", vim.diagnostic.goto_next, "LSP: Next Diagnostic")
+    end,
+})
+```
+
+#### With `nvim-lspconfig` (Neovim legacy $\le$ 0.10)
 
 ```lua
 local lspconfig = require('lspconfig')
