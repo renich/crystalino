@@ -786,7 +786,11 @@ module Crystalline::Lightweight
         name: method.name,
         owner: owner_name,
         args: method.args.map { |arg|
-          ArgInfo.new(name: arg.name, restriction: substitute_type_vars(arg.restriction, mapping))
+          ArgInfo.new(
+            name: arg.name,
+            restriction: substitute_type_vars(arg.restriction, mapping),
+            default_value: arg.default_value,
+          )
         },
         return_type: substitute_type_vars(method.return_type, mapping),
         class_method: method.class_method,

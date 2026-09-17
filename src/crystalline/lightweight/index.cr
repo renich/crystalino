@@ -14,7 +14,7 @@ module Crystalline::Lightweight
     Unknown
   end
 
-  record ArgInfo, name : String, restriction : String?
+  record ArgInfo, name : String, restriction : String?, default_value : String? = nil
 
   record MethodInfo,
     name : String,
@@ -977,7 +977,8 @@ module Crystalline::Lightweight
 
     protected def method_info_for(definition : Crystal::Def | Crystal::Macro, *, owner : String, class_method = false, is_macro = false)
       args = definition.args.map do |arg|
-        ArgInfo.new(name: arg.name.to_s, restriction: arg.restriction.try(&.to_s))
+        default_val = arg.responds_to?(:default_value) ? arg.default_value.try(&.to_s) : nil
+        ArgInfo.new(name: arg.name.to_s, restriction: arg.restriction.try(&.to_s), default_value: default_val)
       end
 
       return_type = definition.responds_to?(:return_type) ? definition.return_type.try(&.to_s) : nil

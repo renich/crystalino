@@ -7,6 +7,7 @@ require "./result_cache"
 require "./lightweight/completion"
 require "./lightweight/hover"
 require "./lightweight/definitions"
+require "./lightweight/signature_help"
 require "./analysis/*"
 
 class Crystalline::Workspace
@@ -509,6 +510,20 @@ class Crystalline::Workspace
       )
     end
   rescue
+    nil
+  end
+
+  def signature_help(server : LSP::Server, file_uri : URI, position : LSP::Position) : LSP::SignatureHelp?
+    if text_document = @opened_documents[file_uri.to_s]?
+      if query = lightweight_query_for(text_document)
+        sig_help = Crystalline::Lightweight::SignatureHelp.signature_help(text_document.contents, position.line, position.character, query)
+        if sig_help
+          LSP::Log.info { "[signature_help] hit: #{file_uri.decoded_path}:#{position.line}:#{position.character}" }
+          return sig_help
+        end
+        LSP::Log.info { "[signature_help] miss: #{file_uri.decoded_path}:#{position.line}:#{position.character}" }
+      end
+    end
     nil
   end
 

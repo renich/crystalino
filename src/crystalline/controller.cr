@@ -44,46 +44,7 @@ class Crystalline::Controller
   # def on_request(message : LSP::RequestMessage(T)) : T forall T
   def on_request(message : LSP::RequestMessage)
     @pending_requests << message.id
-    case message
-    when LSP::DocumentFormattingRequest
-      @documents_lock.synchronize {
-        workspace.format_document(message.params).try { |(formatted_document, document)|
-          range = LSP::Range.new(
-            start: LSP::Position.new(line: 0, character: 0),
-            end: document.eof_position,
-          )
-          [
-            LSP::TextEdit.new(
-              range: range,
-              new_text: formatted_document,
-            ),
-          ]
-        }
-      }
-    when LSP::DocumentRangeFormattingRequest
-      @documents_lock.synchronize {
-        workspace.format_document(message.params).try { |(formatted_document, document)|
-          [
-            LSP::TextEdit.new(
-              range: message.params.range,
-              new_text: formatted_document,
-            ),
-          ]
-        }
-      }
-    when LSP::HoverRequest
-      handle_hover_request(message)
-    when LSP::DefinitionRequest
-      handle_definition_request(message)
-    when LSP::CompletionRequest
-      handle_completion_request(message)
-    when LSP::DocumentSymbolsRequest
-      handle_document_symbols_request(message)
-    when LSP::WorkspaceSymbolRequest
-      handle_workspace_symbol_request(message)
-    else
-      nil
-    end
+    dispatch_request(message)
   rescue e : Crystal::TypeException
     LSP::Log.warn(exception: e) { e.to_s }
     nil
@@ -92,6 +53,66 @@ class Crystalline::Controller
     nil
   ensure
     @pending_requests.delete message.id
+  end
+
+  private def dispatch_request(message : LSP::RequestMessage)
+    case message
+    when LSP::DocumentFormattingRequest
+      handle_formatting_request(message)
+    when LSP::DocumentRangeFormattingRequest
+      handle_range_formatting_request(message)
+    when LSP::HoverRequest
+      handle_hover_request(message)
+    when LSP::DefinitionRequest
+      handle_definition_request(message)
+    else
+      dispatch_feature_request(message)
+    end
+  end
+
+  private def dispatch_feature_request(message : LSP::RequestMessage)
+    case message
+    when LSP::CompletionRequest
+      handle_completion_request(message)
+    when LSP::DocumentSymbolsRequest
+      handle_document_symbols_request(message)
+    when LSP::WorkspaceSymbolRequest
+      handle_workspace_symbol_request(message)
+    when LSP::SignatureHelpRequest
+      handle_signature_help_request(message)
+    else
+      nil
+    end
+  end
+
+  private def handle_formatting_request(message : LSP::DocumentFormattingRequest)
+    @documents_lock.synchronize {
+      workspace.format_document(message.params).try { |(formatted_document, document)|
+        range = LSP::Range.new(
+          start: LSP::Position.new(line: 0, character: 0),
+          end: document.eof_position,
+        )
+        [
+          LSP::TextEdit.new(
+            range: range,
+            new_text: formatted_document,
+          ),
+        ]
+      }
+    }
+  end
+
+  private def handle_range_formatting_request(message : LSP::DocumentRangeFormattingRequest)
+    @documents_lock.synchronize {
+      workspace.format_document(message.params).try { |(formatted_document, document)|
+        [
+          LSP::TextEdit.new(
+            range: message.params.range,
+            new_text: formatted_document,
+          ),
+        ]
+      }
+    }
   end
 
   def on_notification(message : LSP::NotificationMessage) : Nil
@@ -177,5 +198,11 @@ class Crystalline::Controller
     @documents_lock.synchronize do
       workspace.workspace_symbol(@server, message.params.query)
     end
+  end
+
+  private def handle_signature_help_request(message : LSP::SignatureHelpRequest)
+    return nil unless @pending_requests.includes? message.id
+    file_uri = URI.parse message.params.text_document.uri
+    workspace.signature_help(@server, file_uri, message.params.position)
   end
 end
