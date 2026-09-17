@@ -16,6 +16,10 @@ Added
 * LSP Lexical Rename (``textDocument/prepareRename`` & ``textDocument/rename``): Scope-bounded identifier renaming provider with pre-flight token validation, keyword/comment rejection, prefix-preserving sigil sanitization, and atomic ``WorkspaceEdit`` generation.
 * Protocol Tests: JSON-RPC wire-level request deserialization and response serialization specifications for Semantic Tokens, Prepare Rename, and Rename.
 
+Changed
+-------
+* Documentation Overhaul: Completely rewrote ``README.md`` for Crystalino, highlighting empirical benchmarks (11.7x faster completion, 33.3x faster p95 latency, 68% binary reduction), modernizing editor setups, and establishing MIT attribution.
+
 [0.19.1] - 2026-09-17
 =====================
 
